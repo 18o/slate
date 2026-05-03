@@ -1,0 +1,12 @@
+[package]
+name = "example-react-salvo"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+slate = { path = "../..", features = ["salvo"] }
+rust-embed = "8"
+salvo = { version = "0.93", default-features = false, features = ["server"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+serde_json = "1"

@@ -1,0 +1,83 @@
+[package]
+name = "slate"
+version = "0.1.0"
+edition = "2024"
+description = "In-process SSR engine via QuickJS — framework-agnostic core with optional web framework integrations"
+license = "MIT"
+repository = "https://github.com/john/slate"
+
+[features]
+default = []
+salvo = ["dep:salvo", "dep:reqwest", "dep:http-body-util", "dep:mime_guess", "dep:parking_lot", "salvo/test"]
+axum = ["dep:axum", "dep:tower", "dep:reqwest", "dep:http-body-util", "dep:mime_guess", "dep:parking_lot"]
+
+[dependencies]
+# QuickJS bindings
+rquickjs = { version = "0.11", features = [
+    "loader", "dyn-load", "properties", "futures", "classes", "macro", "bindgen",
+] }
+rquickjs-serde = "0.5"
+
+# Asset embedding
+rust-embed = { version = "8", features = ["include-exclude", "compression"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["macros", "sync", "rt", "time"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bytes = "1"
+
+# Logging
+tracing = "0.1"
+
+# HTTP types (used by core DispatchResult)
+http = "1"
+
+# Random (for crypto.getRandomValues polyfill)
+rand = "0.10"
+
+# ── Shared between Salvo & Axum ──
+parking_lot = { version = "0.12", optional = true }
+
+# ── Salvo integration (optional) ──
+salvo = { version = "0.93", default-features = false, optional = true }
+
+# ── Axum integration (optional) ──
+axum = { version = "0.8", default-features = false, optional = true }
+tower = { version = "0.5", default-features = false, optional = true }
+
+# ── Shared between Salvo & Axum ──
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",
+], optional = true }
+http-body-util = { version = "0.1", optional = true }
+mime_guess = { version = "2", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+salvo = { version = "0.93", default-features = false, features = ["test"] }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+[[test]]
+name = "cache"
+path = "tests/cache.rs"
+required-features = ["salvo"]
+
+[[test]]
+name = "salvo_e2e"
+path = "tests/salvo_e2e.rs"
+required-features = ["salvo"]
+
+[[test]]
+name = "axum_e2e"
+path = "tests/axum_e2e.rs"
+required-features = ["axum"]

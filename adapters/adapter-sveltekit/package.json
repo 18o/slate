@@ -1,0 +1,12 @@
+{
+  "name": "@slate/adapter-sveltekit",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "peerDependencies": {
+    "@sveltejs/kit": "^2"
+  },
+  "dependencies": {
+    "rolldown": "^1.0.0-rc.1"
+  }
+}
