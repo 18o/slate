@@ -245,7 +245,7 @@ where
   let engine = crate::engine::SsrEngine::new::<T>(SalvoDispatcher::new(dispatch_service), ReqwestFetcher::new()).await?;
   let handler = engine.handler();
 
-  let main_router = router_factory().await.push(Router::with_path("<**rest>").goal(ProductionHandler::<T>::new(handler)));
+  let main_router = router_factory().await.push(Router::with_path("{*rest}").goal(ProductionHandler::<T>::new(handler)));
 
   Ok(main_router)
 }

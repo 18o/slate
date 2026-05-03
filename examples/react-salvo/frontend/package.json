@@ -1,20 +1,20 @@
 {
   "name": "example-react-salvo",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "build:ssr": "node build-ssr.mjs",
-    "preview": "vite preview"
+    "build": "vite build --outDir dist/client && node build-ssr.mjs",
+    "build:ssr": "node build-ssr.mjs"
   },
   "dependencies": {
     "react": "^19",
     "react-dom": "^19",
-    "@slate/adapter-react": "file:../../../adapters/adapter-react"
+    "@slate/adapter-react": "*"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4",
+    "rolldown": "^1.0.0-rc.1",
     "vite": "^6"
-  },
-  "type": "module"
+  }
 }

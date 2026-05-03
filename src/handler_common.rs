@@ -62,16 +62,19 @@ impl<D: InternalDispatcher> SsrHandlerCore<D> {
   }
 
   /// Create from pre-existing engine and cache (for Clone implementations).
+  #[cfg(feature = "axum")]
   pub fn new_from_parts(engine: Arc<SsrEngine<D, ReqwestFetcher>>, cache: Arc<SsrCache>) -> Self {
     Self { engine, cache }
   }
 
   /// Get a reference to the cache (for framework-specific Clone impls).
+  #[cfg(feature = "axum")]
   pub fn cache(&self) -> &Arc<SsrCache> {
     &self.cache
   }
 
   /// Get a reference to the engine (for framework-specific Clone impls).
+  #[cfg(feature = "axum")]
   pub fn engine(&self) -> &Arc<SsrEngine<D, ReqwestFetcher>> {
     &self.engine
   }

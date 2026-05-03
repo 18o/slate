@@ -1,29 +1,14 @@
-//! Vue 3 + Salvo example.
-//!
-//! Demonstrates a minimal production deployment using Slate's SSR engine
-//! with Vue 3 frontend and Salvo web framework.
-//!
-//! # Running
+//! Vue + Salvo example.
 //!
 //! ```sh
-//! # 1. Build the frontend
-//! cd frontend && npm install && npm run build:ssr
-//!
-//! # 2. Run the server
+//! cd frontend && npm install && npm run build
 //! cargo run
-//!
-//! # 3. Visit http://localhost:3000
 //! ```
 
 use rust_embed::RustEmbed;
 use salvo::prelude::*;
 use slate;
 
-/// Embedded frontend assets from Vue SSR build output.
-///
-/// The `@slate/adapter-vue` adapter produces:
-/// - `client/` — static assets (JS, CSS, images)
-/// - `entry.js` — IIFE bundle with `__render()` for SSR
 #[derive(RustEmbed)]
 #[folder = "frontend/build/"]
 struct FrontendAssets;
@@ -32,7 +17,7 @@ struct FrontendAssets;
 async fn main() -> anyhow::Result<()> {
   tracing_subscriber::fmt::init();
 
-  let router = slate::init_ssr::<FrontendAssets, _, _>(|| async {
+  let router = slate::salvo::init_ssr::<FrontendAssets, _, _>(|| async {
     Router::new()
       .push(Router::with_path("/api/hello").get(api_hello))
       .push(Router::with_path("/api/time").get(api_time))
@@ -55,6 +40,6 @@ async fn api_hello(res: &mut Response) {
 #[handler]
 async fn api_time(res: &mut Response) {
   res.render(Json(serde_json::json!({
-    "time": "2026-05-03T00:00:00Z",
+    "time": "2026-05-04T00:00:00Z",
   })));
 }

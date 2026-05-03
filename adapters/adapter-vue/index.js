@@ -1,7 +1,7 @@
 import { writeFileSync, mkdirSync, rmSync, existsSync, copyFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { rolldown } from 'rolldown';
-import { jsonPlugin, replacePlugin } from 'rolldown/plugins';
+import { replacePlugin } from 'rolldown/plugins';
 import { POLYFILLS, FETCH_OVERRIDE } from '../shared/polyfills.js';
 
 /**
@@ -86,7 +86,6 @@ export default async function buildVueSSR(options = {}) {
         'process.env.NODE_ENV': JSON.stringify('production'),
         ...define,
       }),
-      jsonPlugin(),
     ],
     onLog(level, log) {
       if (log.code === 'CIRCULAR_DEPENDENCY') return;
@@ -101,8 +100,7 @@ export default async function buildVueSSR(options = {}) {
     format: 'iife',
     name: 'SlateVueSSR',
     exports: 'none',
-    inlineDynamicImports: true,
-    target: 'es2015',
+    codeSplitting: false,
   });
 
   await bundle.close();

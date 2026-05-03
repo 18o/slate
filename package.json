@@ -1,0 +1,9 @@
+{
+  "name": "slate-monorepo",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "adapters/*",
+    "examples/*/frontend"
+  ]
+}

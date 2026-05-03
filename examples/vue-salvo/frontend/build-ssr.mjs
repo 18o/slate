@@ -1,10 +1,11 @@
 // Vue SSR build script for Slate.
-// Builds the client first, then the server SSR IIFE bundle.
+// 1. Build client bundle (Vite)
+// 2. Build SSR IIFE bundle (adapter-vue → rolldown)
 import buildVueSSR from '@slate/adapter-vue';
 import { build } from 'vite';
 import vue from '@vitejs/plugin-vue';
 
-// 1. Build client bundle (for browser)
+// 1. Build client bundle (for browser hydration)
 await build({
   plugins: [vue()],
   build: {

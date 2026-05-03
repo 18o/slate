@@ -1,7 +1,6 @@
 import { writeFileSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { rolldown } from 'rolldown';
-import { jsonPlugin } from 'rolldown/plugins';
 import { POLYFILLS, FETCH_OVERRIDE } from '../shared/polyfills.js';
 
 /** @type {import('@sveltejs/kit').Adapter} */
@@ -41,7 +40,7 @@ export default function (options = {}) {
         resolve: {
           // Resolve node_modules packages
         },
-        plugins: [jsonPlugin()],
+        plugins: [],
         onLog(level, log) {
           // Suppress known harmless warnings
           if (log.code === 'CIRCULAR_DEPENDENCY') return;
@@ -56,10 +55,7 @@ export default function (options = {}) {
         format: 'iife',
         name: 'TwistSSR',
         exports: 'none',
-        inlineDynamicImports: true,
-        // QuickJS doesn't support Object.hasOwn, structuredClone, etc.
-        // Target ES2015 for maximum compatibility.
-        target: 'es2015',
+        codeSplitting: false,
       });
 
       await bundle.close();

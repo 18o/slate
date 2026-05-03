@@ -1,20 +1,20 @@
 {
   "name": "example-vue-salvo",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "build:ssr": "node build-ssr.mjs",
-    "preview": "vite preview"
+    "build": "vite build --outDir dist/client && node build-ssr.mjs",
+    "build:ssr": "node build-ssr.mjs"
   },
   "dependencies": {
     "vue": "^3.4",
     "vue-router": "^4.3",
-    "@slate/adapter-vue": "file:../../../adapters/adapter-vue"
+    "@slate/adapter-vue": "*"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5",
+    "rolldown": "^1.0.0-rc.1",
     "vite": "^6"
-  },
-  "type": "module"
+  }
 }
