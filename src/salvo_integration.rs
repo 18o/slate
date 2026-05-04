@@ -298,12 +298,21 @@ where
   F: Fn() -> Fut,
   Fut: Future<Output = Router>,
 {
-  let render_timeout = config.render_timeout;
-  let dispatch_router = router_factory().await;
-  let dispatch_service = Arc::new(Service::new(dispatch_router));
-
-  let engine = crate::engine::SsrEngine::new::<T>(SalvoDispatcher::new(dispatch_service), ReqwestFetcher::new()?, render_timeout).await?;
-  let handler = engine.handler(&config);
+  // router_factory() is called pool_size + 1 times total
+  // (once per engine + once for the main router).
+  let pool_size = config.pool_size.max(1);
+  let mut engines = Vec::with_capacity(pool_size);
+  for _ in 0..pool_size {
+    let engine = crate::engine::SsrEngine::new::<T>(
+      SalvoDispatcher::new(Arc::new(Service::new(router_factory().await))),
+      ReqwestFetcher::new()?,
+      config.render_timeout,
+    )
+    .await?;
+    engines.push(Arc::new(engine));
+  }
+  let core = SsrHandlerCore::pooled(engines, &config);
+  let handler = SsrHandler { core };
 
   let main_router = router_factory().await.push(Router::with_path("{*rest}").goal(ProductionHandler::<T>::new(handler)));
 

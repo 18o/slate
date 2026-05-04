@@ -114,20 +114,23 @@ impl InternalDispatcher for AxumDispatcher {
 ///
 /// Delegates caching and rendering logic to [`SsrHandlerCore`],
 /// then converts the result into an Axum `Response`.
+///
+/// `Clone` is cheap — it clones an `Arc`, sharing the engine pool,
+/// cache, and pending map across all handler instances.
 pub struct SsrHandler {
-  core: SsrHandlerCore<AxumDispatcher, ReqwestFetcher>,
+  core: Arc<SsrHandlerCore<AxumDispatcher, ReqwestFetcher>>,
 }
 
 impl SsrHandler {
   /// Create a new SsrHandler wrapping the given engine.
   pub fn new(engine: Arc<crate::engine::SsrEngine<AxumDispatcher, ReqwestFetcher>>, config: &SsrConfig) -> Self {
-    Self { core: SsrHandlerCore::new(engine, config) }
+    Self { core: Arc::new(SsrHandlerCore::new(engine, config)) }
   }
 }
 
 impl Clone for SsrHandler {
   fn clone(&self) -> Self {
-    Self { core: SsrHandlerCore::new_from_parts(self.core.engine().clone(), self.core.cache().clone()) }
+    Self { core: self.core.clone() }
   }
 }
 
@@ -309,12 +312,18 @@ pub async fn init_ssr_with_config<T>(api_router: Router, config: SsrConfig) -> a
 where
   T: RustEmbed + Send + Sync + 'static,
 {
-  let render_timeout = config.render_timeout;
   let dispatch_router = api_router.clone();
 
-  let engine = crate::engine::SsrEngine::new::<T>(AxumDispatcher::new(dispatch_router), ReqwestFetcher::new()?, render_timeout).await?;
-
-  let handler = ProductionHandler::<T>::new(SsrHandler::new(Arc::new(engine), &config));
+  let pool_size = config.pool_size.max(1);
+  let mut engines = Vec::with_capacity(pool_size);
+  for _ in 0..pool_size {
+    let engine =
+      crate::engine::SsrEngine::new::<T>(AxumDispatcher::new(dispatch_router.clone()), ReqwestFetcher::new()?, config.render_timeout)
+        .await?;
+    engines.push(Arc::new(engine));
+  }
+  let core = SsrHandlerCore::pooled(engines, &config);
+  let handler = ProductionHandler::<T>::new(SsrHandler { core: Arc::new(core) });
 
   Ok(api_router.fallback(handler))
 }

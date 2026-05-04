@@ -124,12 +124,12 @@ async fn dispatch_sync(
 /// })
 /// ```
 pub struct SsrHandler {
-  core: SsrHandlerCore<ActixDispatcher, ReqwestFetcher>,
+  core: Arc<SsrHandlerCore<ActixDispatcher, ReqwestFetcher>>,
 }
 
 impl Clone for SsrHandler {
   fn clone(&self) -> Self {
-    Self { core: SsrHandlerCore::new(self.core.engine().clone(), &SsrConfig::default()) }
+    Self { core: self.core.clone() }
   }
 }
 
@@ -252,9 +252,13 @@ where
   T: RustEmbed + Send + Sync + 'static,
   F: Fn(&mut web::ServiceConfig) + Clone + Send + Sync + 'static,
 {
-  let render_timeout = config.render_timeout;
-  let dispatcher = ActixDispatcher::new(Arc::new(api_config));
-  let engine = SsrEngine::new::<T>(dispatcher, ReqwestFetcher::new()?, render_timeout).await?;
-
-  Ok(SsrHandler { core: SsrHandlerCore::new(Arc::new(engine), &config) })
+  let pool_size = config.pool_size.max(1);
+  let mut engines = Vec::with_capacity(pool_size);
+  for _ in 0..pool_size {
+    let cfg: Arc<dyn Fn(&mut web::ServiceConfig) + Send + Sync> = Arc::new(api_config.clone());
+    let engine = SsrEngine::new::<T>(ActixDispatcher::new(cfg), ReqwestFetcher::new()?, config.render_timeout).await?;
+    engines.push(Arc::new(engine));
+  }
+  let core = SsrHandlerCore::pooled(engines, &config);
+  Ok(SsrHandler { core: Arc::new(core) })
 }
