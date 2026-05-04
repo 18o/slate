@@ -265,7 +265,7 @@ impl<T: RustEmbed + Send + Sync + 'static> axum::handler::Handler<(), ()> for Pr
       let accepts_br =
         req.headers().get(axum::http::header::ACCEPT_ENCODING).and_then(|v| v.to_str().ok()).map(|s| s.contains("br")).unwrap_or(false);
 
-      if let Some(asset) = handler_common::lookup_static_asset::<T>(path, accepts_br) {
+      if let Some(asset) = crate::static_files::lookup_static_asset::<T>(path, accepts_br) {
         let mut response =
           safe_build_response(AxumResponse::builder().status(StatusCode::OK).header("content-type", &asset.mime), Body::from(asset.data));
 

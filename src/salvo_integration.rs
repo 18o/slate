@@ -247,7 +247,7 @@ impl<T: RustEmbed + Send + Sync + 'static> SalvoHandler for ProductionHandler<T>
     let accepts_br =
       req.headers().get(salvo::http::header::ACCEPT_ENCODING).and_then(|v| v.to_str().ok()).map(|s| s.contains("br")).unwrap_or(false);
 
-    if let Some(asset) = handler_common::lookup_static_asset::<T>(path, accepts_br) {
+    if let Some(asset) = crate::static_files::lookup_static_asset::<T>(path, accepts_br) {
       if let Ok(val) = asset.mime.parse() {
         let _ = res.headers.insert(salvo::http::header::CONTENT_TYPE, val);
       }

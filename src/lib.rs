@@ -40,6 +40,7 @@
 //! Enable via feature flags:
 //! - `salvo` — `slate::salvo::*`
 //! - `axum`  — `slate::axum::*`
+//! - `actix` — `slate::actix::*`
 
 mod engine;
 mod polyfills;
@@ -49,12 +50,16 @@ pub use engine::{SsrEngine, SsrRequest, SsrResponse};
 pub use traits::{DispatchResult, ExternalFetcher, InternalDispatcher};
 
 // Shared types between web framework integrations
-#[cfg(any(feature = "salvo", feature = "axum"))]
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
 mod shared;
 
-// Shared handler logic between web framework integrations
-#[cfg(any(feature = "salvo", feature = "axum"))]
+// Shared SSR render pipeline
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
 mod handler_common;
+
+// Static file serving from RustEmbed
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
+mod static_files;
 
 #[cfg(feature = "salvo")]
 mod salvo_integration;
@@ -74,4 +79,16 @@ pub mod axum {
   //! Axum integration — re-exports for `slate::axum::*`.
   pub use crate::axum_integration::{AxumDispatcher, ProductionHandler, SsrHandler, init_ssr};
   pub use crate::shared::{CachedEntry, ReqwestFetcher, SsrCache};
+}
+
+#[cfg(feature = "actix")]
+mod actix_integration;
+
+#[cfg(feature = "actix")]
+pub mod actix {
+  //! Actix Web integration — re-exports for `slate::actix::*`.
+  pub use crate::actix_integration::{ActixDispatcher, SsrHandler, init_ssr, ssr_handler};
+  pub use crate::handler_common::SsrHandlerCore;
+  pub use crate::shared::{CachedEntry, ReqwestFetcher, SsrCache};
+  pub use crate::static_files::StaticAsset;
 }

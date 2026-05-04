@@ -10,6 +10,7 @@ repository = "https://github.com/john/slate"
 default = []
 salvo = ["dep:salvo", "dep:reqwest", "dep:http-body-util", "dep:mime_guess", "dep:parking_lot", "salvo/test"]
 axum = ["dep:axum", "dep:tower", "dep:reqwest", "dep:http-body-util", "dep:mime_guess", "dep:parking_lot"]
+actix = ["dep:actix-web", "dep:reqwest", "dep:http-body-util", "dep:mime_guess", "dep:parking_lot"]
 
 [dependencies]
 # QuickJS bindings
@@ -57,6 +58,9 @@ salvo = { version = "0.93", default-features = false, optional = true }
 # ── Axum integration (optional) ──
 axum = { version = "0.8", default-features = false, optional = true }
 tower = { version = "0.5", default-features = false, optional = true }
+
+# ── Actix integration (optional) ──
+actix-web = { version = "4", default-features = false, optional = true }
 
 # ── Shared between Salvo & Axum ──
 reqwest = { version = "0.13", default-features = false, features = [

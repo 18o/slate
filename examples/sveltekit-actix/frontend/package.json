@@ -1,0 +1,18 @@
+{
+  "name": "example-sveltekit-salvo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@slate/adapter-sveltekit": "*"
+  },
+  "devDependencies": {
+    "@sveltejs/kit": "^2",
+    "svelte": "^5",
+    "rolldown": "^1.0.0-rc.1",
+    "vite": "^6"
+  }
+}

@@ -1,23 +1,24 @@
-//! Shared integration logic between web framework handlers.
+//! SSR render pipeline — shared by all web framework integrations.
 //!
-//! Both Salvo and Axum integrations follow the same pattern:
-//! 1. Check cache by `method:path` key
-//! 2. On miss, extract request data and render via QuickJS
-//! 3. If cacheable, store in cache
-//! 4. Build framework-specific response
-//!
-//! This module extracts the common rendering + caching logic so that
-//! adding a new web framework (actix, warp, etc.) only requires writing
-//! the dispatcher and response-building glue.
+//! [`SsrHandlerCore`] encapsulates the cache-lookup → render → cache-store
+//! flow. Each web framework (Salvo, Axum, Actix) wraps this core with
+//! framework-specific request extraction and response building.
 
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
 use std::sync::Arc;
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
 use std::time::Instant;
 
-use crate::engine::{SsrEngine, SsrRequest, SsrResponse};
+use crate::engine::SsrRequest;
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
+use crate::engine::{SsrEngine, SsrResponse};
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
 use crate::shared::{CachedEntry, SsrCache, is_cacheable};
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
 use crate::traits::{ExternalFetcher, InternalDispatcher};
 
 /// Maximum body size for request payloads (10 MB).
+#[cfg(any(feature = "salvo", feature = "axum"))]
 pub const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
 
 /// 500 error page HTML returned when SSR rendering fails.
@@ -32,6 +33,8 @@ pub const ERROR_PAGE_500: &str = "<html><body><h1>500 Internal Server Error</h1>
 /// Framework handlers extract these from their request types, then pass
 /// the struct to [`SsrHandlerCore::handle`]. This avoids per-framework
 /// argument unpacking in the shared render pipeline.
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
+#[derive(Debug)]
 pub struct IncomingRequest {
   /// URL path component (used for cache key).
   pub path: String,
@@ -45,169 +48,96 @@ pub struct IncomingRequest {
 // SsrHandlerCore: framework-agnostic render pipeline
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// Framework-agnostic SSR handler core.
-///
-/// Holds the engine and cache. Framework-specific wrappers (Salvo's `Handler`,
-/// Axum's `Handler`) delegate to [`SsrHandlerCore::handle`] for the actual
-/// rendering logic, then convert the [`RenderOutcome`] into their own response type.
-pub struct SsrHandlerCore<D: InternalDispatcher, F: ExternalFetcher> {
-  engine: Arc<SsrEngine<D, F>>,
-  cache: Arc<SsrCache>,
-}
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
+pub use self::ssr_core::*;
 
-impl<D: InternalDispatcher, F: ExternalFetcher> SsrHandlerCore<D, F> {
-  /// Create a new handler wrapping the given engine.
-  pub fn new(engine: Arc<SsrEngine<D, F>>) -> Self {
-    Self { engine, cache: Arc::new(SsrCache::new()) }
-  }
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
+mod ssr_core {
+  use super::*;
 
-  /// Create from pre-existing engine and cache (for Clone implementations).
-  #[cfg(feature = "axum")]
-  pub fn new_from_parts(engine: Arc<SsrEngine<D, F>>, cache: Arc<SsrCache>) -> Self {
-    Self { engine, cache }
-  }
-
-  /// Get a reference to the cache (for framework-specific Clone impls).
-  #[cfg(feature = "axum")]
-  pub fn cache(&self) -> &Arc<SsrCache> {
-    &self.cache
-  }
-
-  /// Get a reference to the engine (for framework-specific Clone impls).
-  #[cfg(feature = "axum")]
-  pub fn engine(&self) -> &Arc<SsrEngine<D, F>> {
-    &self.engine
-  }
-
-  /// Execute the SSR render pipeline.
+  /// Framework-agnostic SSR handler core.
   ///
-  /// Returns a [`RenderOutcome`] that the caller converts into a
-  /// framework-specific response. This method handles caching and rendering.
-  pub async fn handle(&self, incoming: IncomingRequest) -> RenderOutcome {
-    let cache_key = format!("{}:{}", incoming.ssr_request.method, incoming.path);
-    let method = incoming.ssr_request.method.clone();
-    let has_query = incoming.has_query;
+  /// Holds the engine and cache. Framework-specific wrappers (Salvo's `Handler`,
+  /// Axum's `Handler`, Actix's `SsrHandler`) delegate to [`SsrHandlerCore::handle`]
+  /// for the actual rendering logic, then convert the [`RenderOutcome`] into
+  /// their own response type.
+  pub struct SsrHandlerCore<D: InternalDispatcher, F: ExternalFetcher> {
+    engine: Arc<SsrEngine<D, F>>,
+    cache: Arc<SsrCache>,
+  }
 
-    // 1. Try cache first — skip lookup for query-string requests to prevent stale hits
-    if !has_query && let Some(cached) = self.cache.get(&cache_key) {
-      return RenderOutcome::CacheHit(cached);
+  impl<D: InternalDispatcher, F: ExternalFetcher> SsrHandlerCore<D, F> {
+    /// Create a new handler wrapping the given engine.
+    pub fn new(engine: Arc<SsrEngine<D, F>>) -> Self {
+      Self { engine, cache: Arc::new(SsrCache::new()) }
     }
 
-    // 2. Cache miss — render via QuickJS
-    match self.engine.render(incoming.ssr_request).await {
-      Ok(ssr_res) => {
-        let cacheable = is_cacheable(&method, ssr_res.status, &ssr_res.headers, has_query, ssr_res.fetched);
+    /// Create from pre-existing engine and cache (for Clone implementations).
+    #[cfg(feature = "axum")]
+    pub fn new_from_parts(engine: Arc<SsrEngine<D, F>>, cache: Arc<SsrCache>) -> Self {
+      Self { engine, cache }
+    }
 
-        if cacheable {
-          self.cache.set(
-            cache_key,
-            CachedEntry { status: ssr_res.status, headers: ssr_res.headers.clone(), body: ssr_res.body.clone(), cached_at: Instant::now() },
-          );
+    /// Get a reference to the cache (for framework-specific Clone impls).
+    #[cfg(feature = "axum")]
+    pub fn cache(&self) -> &Arc<SsrCache> {
+      &self.cache
+    }
+
+    /// Get a reference to the engine (for framework-specific Clone impls).
+    #[cfg(any(feature = "axum", feature = "actix"))]
+    pub fn engine(&self) -> &Arc<SsrEngine<D, F>> {
+      &self.engine
+    }
+
+    /// Execute the SSR render pipeline.
+    ///
+    /// Returns a [`RenderOutcome`] that the caller converts into a
+    /// framework-specific response. This method handles caching and rendering.
+    pub async fn handle(&self, incoming: IncomingRequest) -> RenderOutcome {
+      let cache_key = format!("{}:{}", incoming.ssr_request.method, incoming.path);
+      let method = incoming.ssr_request.method.clone();
+      let has_query = incoming.has_query;
+
+      // 1. Try cache first — skip lookup for query-string requests to prevent stale hits
+      if !has_query && let Some(cached) = self.cache.get(&cache_key) {
+        return RenderOutcome::CacheHit(cached);
+      }
+
+      // 2. Cache miss — render via QuickJS
+      match self.engine.render(incoming.ssr_request).await {
+        Ok(ssr_res) => {
+          let cacheable = is_cacheable(&method, ssr_res.status, &ssr_res.headers, has_query, ssr_res.fetched);
+
+          if cacheable {
+            self.cache.set(
+              cache_key,
+              CachedEntry {
+                status: ssr_res.status,
+                headers: ssr_res.headers.clone(),
+                body: ssr_res.body.clone(),
+                cached_at: Instant::now(),
+              },
+            );
+          }
+
+          RenderOutcome::Rendered(ssr_res)
         }
-
-        RenderOutcome::Rendered(ssr_res)
-      }
-      Err(e) => {
-        tracing::error!("SSR render failed: {e}");
-        RenderOutcome::Error
+        Err(e) => {
+          tracing::error!("SSR render failed: {e}");
+          RenderOutcome::Error
+        }
       }
     }
   }
-}
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// RenderOutcome: result of the render pipeline
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-/// Result of the SSR render pipeline, before conversion to a framework response.
-pub enum RenderOutcome {
-  /// Cache hit — return the cached entry with `x-ssr-cache: HIT`.
-  CacheHit(Arc<CachedEntry>),
-  /// Fresh render — return with `x-ssr-cache: MISS`.
-  Rendered(SsrResponse),
-  /// Render failed — return 500 error page.
-  Error,
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Static file serving helpers
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-/// Result of looking up a static asset from RustEmbed.
-pub struct StaticAsset {
-  /// MIME type string (e.g. "text/html", "application/javascript").
-  pub mime: String,
-  /// File content bytes (may be brotli-compressed if content_encoding == "br").
-  pub data: Vec<u8>,
-  /// Whether the asset path contains "/immutable/" (long cache).
-  pub immutable: bool,
-  /// Content-Encoding header value (e.g. Some("br")), None if uncompressed.
-  pub content_encoding: Option<String>,
-}
-
-/// Look up a static asset from a RustEmbed bundle.
-///
-/// Searches for `client{path}` in the embedded assets. If `accepts_br` is true,
-/// tries `client{path}.br` first (smaller, faster to transfer) and falls back
-/// to the uncompressed original.
-///
-/// URL-decodes the path first so that `%20` (space) and other
-/// percent-encoded characters match the original filenames.
-/// Returns `Some(StaticAsset)` if found, `None` otherwise.
-pub fn lookup_static_asset<T: rust_embed::RustEmbed>(path: &str, accepts_br: bool) -> Option<StaticAsset> {
-  let decoded = percent_decode(path);
-
-  // Try brotli-compressed variant first
-  if accepts_br {
-    let br_path = format!("client{decoded}.br");
-    if let Some(file) = T::get(&br_path) {
-      let mime = mime_guess::from_path(format!("client{decoded}")).first_or_octet_stream();
-      return Some(StaticAsset {
-        mime: mime.as_ref().to_string(),
-        data: file.data.to_vec(),
-        immutable: br_path.contains("/immutable/"),
-        content_encoding: Some("br".to_string()),
-      });
-    }
+  /// Result of the SSR render pipeline, before conversion to a framework response.
+  pub enum RenderOutcome {
+    /// Cache hit — return the cached entry with `x-ssr-cache: HIT`.
+    CacheHit(Arc<CachedEntry>),
+    /// Fresh render — return with `x-ssr-cache: MISS`.
+    Rendered(SsrResponse),
+    /// Render failed — return 500 error page.
+    Error,
   }
-
-  // Fall back to uncompressed
-  let asset_path = format!("client{decoded}");
-  let file = T::get(&asset_path)?;
-  let mime = mime_guess::from_path(&asset_path).first_or_octet_stream();
-  Some(StaticAsset {
-    mime: mime.as_ref().to_string(),
-    data: file.data.to_vec(),
-    immutable: asset_path.contains("/immutable/"),
-    content_encoding: None,
-  })
-}
-
-/// Simple percent-decode for static file paths.
-fn percent_decode(input: &str) -> String {
-  let bytes = input.as_bytes();
-  let mut out = Vec::with_capacity(bytes.len());
-  let mut i = 0;
-  while i < bytes.len() {
-    if bytes[i] == b'%'
-      && i + 2 < bytes.len()
-      && let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2]))
-    {
-      out.push(hi << 4 | lo);
-      i += 3;
-      continue;
-    }
-    out.push(bytes[i]);
-    i += 1;
-  }
-  String::from_utf8(out).unwrap_or_default()
-}
-
-fn hex_val(b: u8) -> Option<u8> {
-  match b {
-    b'0'..=b'9' => Some(b - b'0'),
-    b'a'..=b'f' => Some(b - b'a' + 10),
-    b'A'..=b'F' => Some(b - b'A' + 10),
-    _ => None,
-  }
-}
+} // mod ssr_core
