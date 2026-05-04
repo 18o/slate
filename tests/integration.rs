@@ -342,48 +342,44 @@ async fn test_normal_render_completes_within_timeout() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Real SvelteKit IIFE bundle test
+// Minimal IIFE bundle test
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// Real SvelteKit build output (from adapter-quickjs).
-/// This tests the full pipeline: real SvelteKit Server + manifest + routes.
+/// Minimal mock IIFE — validates the full engine pipeline without 13K lines of SvelteKit.
+/// Tests: IIFE eval, __render call, header/body/status passthrough, request fields.
 #[derive(RustEmbed)]
-#[folder = "tests/fixtures/real_sveltekit/"]
-struct RealSvelteKitAssets;
+#[folder = "tests/fixtures/minimal/"]
+struct MinimalAssets;
 
 #[tokio::test]
-async fn test_real_sveltekit_iife_renders() {
-  let engine = SsrEngine::new::<RealSvelteKitAssets>(MockDispatcher::new(), MockFetcher)
+async fn test_minimal_iife_renders() {
+  let engine = SsrEngine::new::<MinimalAssets>(MockDispatcher::new(), MockFetcher)
     .await
-    .expect("Engine creation with real SvelteKit IIFE should succeed");
+    .expect("Engine creation with minimal IIFE should succeed");
 
   let req = SsrRequest {
     method: "GET".to_string(),
-    url: "/".to_string(),
+    url: "/test-page".to_string(),
     headers: HashMap::new(),
     body: None,
     remote_addr: "127.0.0.1:12345".to_string(),
   };
 
-  let res = engine.render(req).await.expect("Rendering real SvelteKit page should succeed");
-
-  if res.status != 200 {
-    eprintln!("Status: {}", res.status);
-    eprintln!("Headers: {:?}", res.headers);
-    eprintln!("Body length: {}", res.body.len());
-    eprintln!("Body: {:?}", res.body);
-  }
+  let res = engine.render(req).await.expect("Rendering minimal IIFE should succeed");
 
   assert_eq!(res.status, 200, "Expected 200 OK, got status {}", res.status);
 
-  // The SvelteKit minimal template renders "Welcome to SvelteKit"
   assert!(
     res.body.contains("Welcome to SvelteKit"),
-    "Expected page to contain 'Welcome to SvelteKit', got: {}",
+    "Expected body to contain 'Welcome to SvelteKit', got: {}",
     &res.body[..res.body.len().min(500)]
   );
 
-  // Should be HTML
+  assert!(
+    res.body.contains("method: GET"),
+    "Expected body to contain request method",
+  );
+
   let ct = res.headers.iter().find(|(k, _)| k == "content-type").map(|(_, v)| v.clone()).unwrap_or_default();
-  assert!(ct.contains("text/html"), "Expected text/html content-type, got: {ct}");
+  assert_eq!(ct, "text/html; charset=utf-8", "Expected text/html content-type, got: {ct}");
 }

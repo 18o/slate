@@ -1,16 +1,23 @@
-//! SvelteKit + Axum example.
+//! Axum + Slate SSR example.
+//!
+//! Works with any frontend build. Default: SvelteKit.
 //!
 //! ```sh
-//! cd frontend && npm install && npm run build
-//! cargo run
+//! cd ../sveltekit && npm install && npm run build   # or ../vue, ../react
+//! cd ../axum && cargo run
 //! ```
 
 use axum::{routing::get, Json};
 use rust_embed::RustEmbed;
 use serde_json::{json, Value};
 
+// ── Frontend selection ──────────────────────────────────────────
+// Change this path to switch frontends:
+//   SvelteKit  →  #[folder = "../sveltekit/build/"]
+//   Vue        →  #[folder = "../vue/build/"]
+//   React      →  #[folder = "../react/build/"]
 #[derive(RustEmbed)]
-#[folder = "frontend/build/"]
+#[folder = "../sveltekit/build/"]
 struct FrontendAssets;
 
 #[tokio::main]
@@ -30,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn api_hello() -> Json<Value> {
-  Json(json!({ "message": "Hello from SvelteKit + Axum + Slate SSR!" }))
+  Json(json!({ "message": "Hello from Slate SSR!" }))
 }
 
 async fn api_time() -> Json<Value> {

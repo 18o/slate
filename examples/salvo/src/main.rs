@@ -1,15 +1,23 @@
-//! SvelteKit + Salvo example.
+//! Salvo + Slate SSR example.
+//!
+//! Works with any frontend build. Default: SvelteKit.
 //!
 //! ```sh
-//! cd frontend && npm install && npm run build
-//! cargo run
+//! cd ../sveltekit && npm install && npm run build   # or ../vue, ../react
+//! cd ../salvo && cargo run
 //! ```
 
 use rust_embed::RustEmbed;
 use salvo::prelude::*;
 
+// ── Frontend selection ──────────────────────────────────────────
+// Change this path to switch frontends:
+//   SvelteKit  →  #[folder = "../sveltekit/build/"]
+//   Vue        →  #[folder = "../vue/build/"]
+//   React      →  #[folder = "../react/build/"]
+// The Rust server code below is the same for all frameworks.
 #[derive(RustEmbed)]
-#[folder = "frontend/build/"]
+#[folder = "../sveltekit/build/"]
 struct FrontendAssets;
 
 #[tokio::main]
@@ -30,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
 #[handler]
 async fn api_hello(res: &mut Response) {
   res.render(Json(serde_json::json!({
-    "message": "Hello from SvelteKit + Salvo + Slate SSR!"
+    "message": "Hello from Slate SSR!"
   })));
 }
 
