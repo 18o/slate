@@ -1,5 +1,6 @@
-import { writeFileSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { writeFileSync, mkdirSync, rmSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, resolve, extname, relative } from 'node:path';
+import { brotliCompressSync, constants as zlibConstants } from 'node:zlib';
 import { rolldown } from 'rolldown';
 import { POLYFILLS, FETCH_OVERRIDE } from '../shared/polyfills.js';
 
@@ -7,7 +8,7 @@ import { POLYFILLS, FETCH_OVERRIDE } from '../shared/polyfills.js';
 export default function (options = {}) {
   const {
     out = 'build',
-    precompress = false,
+    precompress = true,
     envPrefix = '',
   } = options;
 
@@ -25,6 +26,12 @@ export default function (options = {}) {
       builder.writeClient(clientDir);
       builder.writeServer(serverDir);
       builder.writePrerendered(out);
+
+      // 2.5 Precompress static assets (brotli) for faster delivery
+      if (precompress) {
+        const compressed = precompressAssets(clientDir);
+        builder.log.minor(`  brotli compressed ${compressed} files in client/`);
+      }
 
       // 3. Generate manifest
       const manifest = builder.generateManifest({ relativePath: '.' });
@@ -167,4 +174,41 @@ globalThis.__render = async function(request) {
   };
 };
 `;
+}
+
+/**
+ * Recursively compress .js and .css files in a directory with brotli.
+ * Creates .br files alongside the originals (e.g., start.js → start.js.br).
+ * Returns the number of files compressed.
+ */
+function precompressAssets(dir) {
+  let count = 0;
+  const COMPRESS_EXT = ['.js', '.css'];
+
+  function walk(current) {
+    const entries = readdirSync(current);
+    for (const name of entries) {
+      const full = join(current, name);
+      const st = statSync(full);
+      if (st.isDirectory()) {
+        walk(full);
+      } else if (COMPRESS_EXT.includes(extname(name)) && st.size > 128) {
+        // Only compress files > 128 bytes (skip tiny/noop files)
+        const input = readFileSync(full);
+        const compressed = brotliCompressSync(input, {
+          params: {
+            [zlibConstants.BROTLI_PARAM_QUALITY]: 8,
+          },
+        });
+        // Only write .br if compression actually saves space
+        if (compressed.length < input.length) {
+          writeFileSync(full + '.br', compressed);
+          count++;
+        }
+      }
+    }
+  }
+
+  walk(dir);
+  return count;
 }

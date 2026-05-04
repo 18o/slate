@@ -261,9 +261,21 @@ impl<T: RustEmbed + Send + Sync + 'static> axum::handler::Handler<(), ()> for Pr
     Box::pin(async move {
       let path = req.uri().path();
 
-      if let Some(asset) = handler_common::lookup_static_asset::<T>(path) {
+      // Check if client accepts brotli-compressed responses
+      let accepts_br =
+        req.headers().get(axum::http::header::ACCEPT_ENCODING).and_then(|v| v.to_str().ok()).map(|s| s.contains("br")).unwrap_or(false);
+
+      if let Some(asset) = handler_common::lookup_static_asset::<T>(path, accepts_br) {
         let mut response =
           safe_build_response(AxumResponse::builder().status(StatusCode::OK).header("content-type", &asset.mime), Body::from(asset.data));
+
+        if let Some(ref encoding) = asset.content_encoding {
+          response
+            .headers_mut()
+            .insert(HeaderName::from_static("content-encoding"), HeaderValue::from_str(encoding).unwrap_or(HeaderValue::from_static("br")));
+        }
+
+        response.headers_mut().insert(HeaderName::from_static("vary"), HeaderValue::from_static("Accept-Encoding"));
 
         if asset.immutable {
           response

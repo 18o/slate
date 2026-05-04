@@ -21,6 +21,51 @@ Browser → Rust server → QuickJS (persistent worker thread)
 - **Static assets** served from embedded memory via `RustEmbed`
 - **In-memory HTML cache** with `X-SSR-Cache: HIT/MISS` headers
 
+## Designed for SEO SSR — not a Node.js replacement
+
+Slate renders your frontend pages **for search engines and first-load performance**. It is NOT a general-purpose Node.js runtime.
+
+### ✅ When to use
+
+| Scenario | Why it fits |
+|----------|-------------|
+| **SEO for SPAs** | Google/Bing see fully rendered HTML instead of an empty `<div id="app">` |
+| **First-load speed** | Users get a complete page immediately, then SvelteKit hydrates it |
+| **Single binary deployment** | No need to install Node.js, bun, or manage a separate SSR process |
+| **Co-located frontend + backend** | API calls from SSR are zero-HTTP (in-process) — no network round-trip |
+
+### ❌ When NOT to use
+
+| Scenario | Why it won't work |
+|----------|-------------------|
+| **Deep Node.js dependencies** | Slate runs QuickJS — no `Buffer`, `stream`, `child_process`, `fs`, native C++ modules |
+| **Server-side business logic** | Put that in your Rust handlers. The frontend should **render HTML, not compute business rules** |
+| **WebSocket / SSE / streaming** | SSR is one-shot `request → HTML`. Real-time features belong on the client side |
+| **High QPS (>1000 RPS)** | QuickJS is an interpreter, not a JIT. For extreme throughput, pre-render at build time or add a CDN |
+
+### Architecture philosophy
+
+```
+┌─ Frontend (SvelteKit/Vue/React) ─┐      ┌─ Backend (Rust) ──────────┐
+│  load() {                         │      │  async fn api_handler() {  │
+│    // Light data fetching only    │      │    // All business logic   │
+│    const data = await fetch(      │      │    // Database queries     │
+│      '/api/users'                 │      │    // Auth / permissions   │
+│    );                             │      │    // Data transformation  │
+│    return { data };  // → render  │      │    // Heavy computation    │
+│  }                                │      │  }                        │
+│  // After hydration:              │      └───────────────────────────┘
+│  //   Client-side interactivity   │               ▲
+│  //   Real-time (WebSocket/SSE)   │               │ zero-HTTP
+│  //   Animations, transitions     │               │ in-process
+└──────────────────────────────────┘               │
+         ▲                                         │
+         │  SSR: HTML for SEO + first load         │
+         └─────────────────────────────────────────┘
+```
+
+> **Key rule**: If you find yourself writing complex data processing in `load()` functions or server-side routes, move it to Rust. The frontend is for presentation. Slate bridges the two in one process.
+
 ## Quick start
 
 ### 1. Build your frontend with a Slate adapter

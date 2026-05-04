@@ -243,10 +243,22 @@ impl<T: RustEmbed + Send + Sync + 'static> SalvoHandler for ProductionHandler<T>
   async fn handle(&self, req: &mut Request, depot: &mut Depot, res: &mut Response, ctrl: &mut FlowCtrl) {
     let path = req.uri().path();
 
-    if let Some(asset) = handler_common::lookup_static_asset::<T>(path) {
+    // Check if client accepts brotli-compressed responses
+    let accepts_br =
+      req.headers().get(salvo::http::header::ACCEPT_ENCODING).and_then(|v| v.to_str().ok()).map(|s| s.contains("br")).unwrap_or(false);
+
+    if let Some(asset) = handler_common::lookup_static_asset::<T>(path, accepts_br) {
       if let Ok(val) = asset.mime.parse() {
         let _ = res.headers.insert(salvo::http::header::CONTENT_TYPE, val);
       }
+
+      if let Some(ref encoding) = asset.content_encoding
+        && let Ok(val) = encoding.as_str().parse()
+      {
+        let _ = res.headers.insert(salvo::http::header::CONTENT_ENCODING, val);
+      }
+
+      let _ = res.headers.insert(salvo::http::header::VARY, "Accept-Encoding".parse().unwrap());
 
       if asset.immutable {
         let _ = res.headers.insert(
