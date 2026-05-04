@@ -153,15 +153,11 @@ globalThis.__render = async function(request) {
     }
   }
 
-  // Serialize headers — merge multi-value headers (e.g. set-cookie) with ", " joining
-  // per WHATWG spec. Object.fromEntries would lose duplicate keys.
-  var hdrs = {};
+  // Serialize headers as array of [key, value] pairs — preserves multi-value
+  // headers (e.g. Set-Cookie). Each pair is a separate entry in the array.
+  var hdrs = [];
   response.headers.forEach(function(v, k) {
-    if (k in hdrs) {
-      hdrs[k] = hdrs[k] + ', ' + v;
-    } else {
-      hdrs[k] = v;
-    }
+    hdrs.push([k, v]);
   });
 
   return {

@@ -13107,51 +13107,42 @@ ${stack}\nhttps://svelte.dev/e/hydratable_serialization_failed`);
   if (typeof Headers === "undefined") {
     globalThis.Headers = class Headers {
       constructor(init) {
-        this._map = new Map();
+        this._list = [];
         if (init) {
           if (init instanceof Headers) {
-            init.forEach((v, k) => this._map.set(k, v));
+            init._list.forEach((entry) => this._list.push([entry[0], entry[1]]));
           } else if (Array.isArray(init)) {
-            for (const [key, value] of init) {
-              this._map.set(key.toLowerCase(), String(value));
+            for (let i = 0; i < init.length; i++) {
+              this._list.push([String(init[i][0]).toLowerCase(), String(init[i][1])]);
             }
           } else if (typeof init === "object") {
-            for (const [key, value] of Object.entries(init)) {
-              this._map.set(key.toLowerCase(), String(value));
+            const keys = Object.keys(init);
+            for (let i = 0; i < keys.length; i++) {
+              this._list.push([keys[i].toLowerCase(), String(init[keys[i]])]);
             }
           }
         }
       }
       get(name) {
-        return this._map.get(name.toLowerCase()) || null;
+        const n = name.toLowerCase();
+        if (n === 'set-cookie') {
+          for (let i = 0; i < this._list.length; i++) { if (this._list[i][0] === n) return this._list[i][1]; }
+          return null;
+        }
+        const values = [];
+        for (let i = 0; i < this._list.length; i++) { if (this._list[i][0] === n) values.push(this._list[i][1]); }
+        return values.length > 0 ? values.join(', ') : null;
       }
-      set(name, value) {
-        this._map.set(name.toLowerCase(), String(value));
-      }
-      has(name) {
-        return this._map.has(name.toLowerCase());
-      }
-      delete(name) {
-        this._map.delete(name.toLowerCase());
-      }
-      entries() {
-        return this._map.entries();
-      }
-      keys() {
-        return this._map.keys();
-      }
-      values() {
-        return this._map.values();
-      }
-      [Symbol.iterator]() {
-        return this._map.entries();
-      }
-      forEach(cb) {
-        this._map.forEach((v, k) => cb(v, k, this));
-      }
-      getSetCookie() {
-        return [];
-      }
+      set(name, value) { const n = name.toLowerCase(); this._list = this._list.filter((e) => e[0] !== n); this._list.push([n, String(value)]); }
+      has(name) { const n = name.toLowerCase(); for (let i = 0; i < this._list.length; i++) { if (this._list[i][0] === n) return true; } return false; }
+      delete(name) { const n = name.toLowerCase(); this._list = this._list.filter((e) => e[0] !== n); }
+      append(name, value) { this._list.push([name.toLowerCase(), String(value)]); }
+      entries() { return this._list[Symbol.iterator](); }
+      keys() { const seen = {}, result = []; for (let i = 0; i < this._list.length; i++) { if (!seen[this._list[i][0]]) { seen[this._list[i][0]] = true; result.push(this._list[i][0]); } } return result[Symbol.iterator](); }
+      values() { return this._list.map((e) => e[1])[Symbol.iterator](); }
+      [Symbol.iterator]() { return this._list[Symbol.iterator](); }
+      forEach(cb) { for (let i = 0; i < this._list.length; i++) { cb(this._list[i][1], this._list[i][0], this); } }
+      getSetCookie() { return this._list.filter((e) => e[0] === 'set-cookie').map((e) => e[1]); }
     };
   }
 
@@ -13442,9 +13433,14 @@ ${stack}\nhttps://svelte.dev/e/hydratable_serialization_failed`);
         body = String.fromCharCode.apply(null, response.body);
     }
 
+    var hdrs = [];
+    response.headers.forEach(function(v, k) {
+      hdrs.push([k, v]);
+    });
+
     return {
       status: response.status,
-      headers: Object.fromEntries(response.headers),
+      headers: hdrs,
       body: body || "",
     };
   };

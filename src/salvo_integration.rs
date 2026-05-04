@@ -74,8 +74,7 @@ impl InternalDispatcher for SalvoDispatcher {
 
     let status = res.status_code.unwrap_or(StatusCode::OK).as_u16();
 
-    let hdrs: std::collections::HashMap<String, String> =
-      res.headers.iter().map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string())).collect();
+    let hdrs: Vec<(String, String)> = res.headers.iter().map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string())).collect();
 
     let body = match read_res_body(res.body).await {
       Ok(b) => b,
@@ -194,7 +193,7 @@ fn apply_ssr_response(res: &mut Response, ssr_res: SsrResponse) {
       continue;
     }
     if let (Ok(name), Ok(val)) = (key.parse::<http::header::HeaderName>(), value.parse::<http::header::HeaderValue>()) {
-      res.headers.insert(name, val);
+      res.headers.append(name, val);
     }
   }
   res.body = ResBody::Once(ssr_res.body.into_bytes().into());

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 /// Result of an internal dispatch (zero-HTTP call to a Rust handler)
 /// or an external HTTP fetch.
 ///
@@ -8,7 +6,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct DispatchResult {
   pub status: u16,
-  pub headers: HashMap<String, String>,
+  pub headers: Vec<(String, String)>,
   pub body: Vec<u8>,
 }
 
@@ -17,7 +15,7 @@ impl DispatchResult {
   pub fn error(status: u16, message: &str) -> Self {
     Self {
       status,
-      headers: HashMap::from([("content-type".to_string(), "application/json".to_string())]),
+      headers: vec![("content-type".to_string(), "application/json".to_string())],
       body: format!(r#"{{"error":"{message}"}}"#).into_bytes(),
     }
   }

@@ -3,7 +3,6 @@
 //! `ReqwestFetcher`, `SsrCache` — used by both Salvo and Axum integrations.
 //! Only compiled when at least one integration feature is enabled.
 
-use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -150,7 +149,7 @@ impl ExternalFetcher for ReqwestFetcher {
           return DispatchResult::error(502, "response body exceeds size limit");
         }
 
-        let hdrs: HashMap<String, String> =
+        let hdrs: Vec<(String, String)> =
           resp.headers().iter().map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string())).collect();
         let body_bytes = match resp.bytes().await {
           Ok(bytes) => bytes,
@@ -202,7 +201,7 @@ pub struct SsrCache {
 #[derive(Clone)]
 pub struct CachedEntry {
   pub status: u16,
-  pub headers: HashMap<String, String>,
+  pub headers: Vec<(String, String)>,
   pub body: String,
   pub cached_at: Instant,
 }
@@ -269,7 +268,7 @@ impl Default for SsrCache {
 ///
 /// Note: The `Vary` header is not respected — responses that vary by
 /// `Accept-Language` etc. should not be served through this cache.
-pub fn is_cacheable(method: &str, status: u16, headers: &HashMap<String, String>, has_query: bool, fetched: bool) -> bool {
-  let has_cookie = headers.keys().any(|k| k.eq_ignore_ascii_case("set-cookie"));
+pub fn is_cacheable(method: &str, status: u16, headers: &[(String, String)], has_query: bool, fetched: bool) -> bool {
+  let has_cookie = headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("set-cookie"));
   method == "GET" && status == 200 && !has_cookie && !has_query && !fetched
 }

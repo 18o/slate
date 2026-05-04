@@ -4,13 +4,13 @@
 
 #![cfg(any(feature = "salvo", feature = "axum"))]
 
-use std::collections::HashMap;
+use std::time::Instant;
 
 use slate::salvo::SsrCache;
 
 /// Helper to create a cache entry.
 fn make_entry(status: u16, body: &str) -> slate::salvo::CachedEntry {
-  slate::salvo::CachedEntry { status, headers: HashMap::new(), body: body.to_string(), cached_at: std::time::Instant::now() }
+  slate::salvo::CachedEntry { status, headers: vec![], body: body.to_string(), cached_at: Instant::now() }
 }
 
 #[test]
@@ -100,17 +100,17 @@ fn test_cache_bulk_eviction_at_capacity() {
 fn test_cache_preserves_headers() {
   let cache = SsrCache::new();
 
-  let mut headers = HashMap::new();
-  headers.insert("content-type".to_string(), "text/html".to_string());
-  headers.insert("x-custom".to_string(), "value".to_string());
+  let mut headers: Vec<(String, String)> = vec![];
+  headers.push(("content-type".to_string(), "text/html".to_string()));
+  headers.push(("x-custom".to_string(), "value".to_string()));
 
   let entry = slate::salvo::CachedEntry { status: 200, headers, body: "ok".to_string(), cached_at: std::time::Instant::now() };
 
   cache.set("/hdr".to_string(), entry);
 
   let cached = cache.get("/hdr").unwrap();
-  assert_eq!(cached.headers.get("content-type").unwrap(), "text/html");
-  assert_eq!(cached.headers.get("x-custom").unwrap(), "value");
+  assert_eq!(cached.headers.iter().find(|(k, _)| k == "content-type").unwrap().1, "text/html");
+  assert_eq!(cached.headers.iter().find(|(k, _)| k == "x-custom").unwrap().1, "value");
 }
 
 #[test]

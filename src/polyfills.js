@@ -3,6 +3,32 @@ if (typeof performance === 'undefined') {
     globalThis.performance = { now: __rust_performance_now };
 }
 
+// Browser API stubs — QuickJS lacks these, but SSR code (especially third-party
+// libraries like analytics SDKs) may access them. Provide empty stubs so SSR
+// doesn't crash with ReferenceError.
+//
+// IMPORTANT: Do NOT define `window`, `document`, or `location`.
+// Frameworks (SvelteKit, Vue, React) use `typeof window !== 'undefined'`
+// as a browser-detection guard. Setting them would trick SSR into running
+// browser-only code paths — causing hydration mismatches.
+//
+// `self` is safe — it's defined in both browsers (as `window`) and web workers.
+if (typeof self === 'undefined') {
+    globalThis.self = globalThis;
+}
+if (typeof navigator === 'undefined') {
+    globalThis.navigator = {
+        userAgent: 'slate-ssr/1.0',
+        platform: 'linux',
+        language: 'en-US',
+        onLine: false,
+    };
+}
+// `global` for Node.js compat (some polyfills check this)
+if (typeof global === 'undefined') {
+    globalThis.global = globalThis;
+}
+
 // URL / URLSearchParams polyfill (QuickJS doesn't have these built-in).
 // SvelteKit internals require URL for route matching and path resolution.
 // Minimal implementation sufficient for SSR — not a full WHATWG URL spec.

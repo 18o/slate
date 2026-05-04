@@ -25,7 +25,7 @@ impl MockDispatcher {
     let mut responses = HashMap::new();
     responses.insert(
       "/api/test".to_string(),
-      DispatchResult { status: 200, headers: HashMap::new(), body: r#"{"message":"hello from mock dispatcher"}"#.to_string().into_bytes() },
+      DispatchResult { status: 200, headers: vec![], body: r#"{"message":"hello from mock dispatcher"}"#.to_string().into_bytes() },
     );
     Self { responses }
   }
@@ -35,7 +35,7 @@ impl InternalDispatcher for MockDispatcher {
   async fn dispatch(&self, _method: &str, path: &str, _body: Option<&[u8]>, _headers: &[(String, String)]) -> DispatchResult {
     self.responses.get(path).cloned().unwrap_or(DispatchResult {
       status: 404,
-      headers: HashMap::new(),
+      headers: vec![],
       body: r#"{"error":"not found"}"#.to_string().into_bytes(),
     })
   }
@@ -45,7 +45,7 @@ struct MockFetcher;
 
 impl ExternalFetcher for MockFetcher {
   async fn fetch(&self, url: &str, _method: &str, _body: Option<&[u8]>, _headers: &[(String, String)]) -> DispatchResult {
-    DispatchResult { status: 200, headers: HashMap::new(), body: format!("{{\"url\":\"{url}\"}}").into_bytes() }
+    DispatchResult { status: 200, headers: vec![], body: format!("{{\"url\":\"{url}\"}}").into_bytes() }
   }
 }
 
@@ -73,7 +73,7 @@ async fn test_render_basic_get() {
 
   let res = engine.render(req).await.unwrap();
   assert_eq!(res.status, 200);
-  assert_eq!(res.headers.get("content-type"), Some(&"application/json".to_string()));
+  assert_eq!(res.headers.iter().find(|(k, _)| k == "content-type").map(|(_, v)| v.as_str()), Some("application/json"));
 
   let body: serde_json::Value = serde_json::from_str(&res.body).unwrap();
   assert_eq!(body["method"], "GET");
@@ -384,6 +384,6 @@ async fn test_real_sveltekit_iife_renders() {
   );
 
   // Should be HTML
-  let ct = res.headers.get("content-type").cloned().unwrap_or_default();
+  let ct = res.headers.iter().find(|(k, _)| k == "content-type").map(|(_, v)| v.clone()).unwrap_or_default();
   assert!(ct.contains("text/html"), "Expected text/html content-type, got: {ct}");
 }

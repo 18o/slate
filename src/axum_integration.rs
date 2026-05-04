@@ -91,7 +91,7 @@ impl InternalDispatcher for AxumDispatcher {
 
     let status = response.status().as_u16();
 
-    let hdrs: HashMap<String, String> =
+    let hdrs: Vec<(String, String)> =
       response.headers().iter().map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string())).collect();
 
     let body_bytes = to_bytes(response.into_body(), handler_common::MAX_BODY_SIZE).await.unwrap_or_else(|e| {
@@ -166,7 +166,7 @@ impl axum::handler::Handler<(), ()> for SsrHandler {
               continue;
             }
             if let (Ok(name), Ok(val)) = (k.parse::<HeaderName>(), v.parse::<HeaderValue>()) {
-              response.headers_mut().insert(name, val);
+              response.headers_mut().append(name, val);
             }
           }
           response.headers_mut().insert(HeaderName::from_static("x-ssr-cache"), HeaderValue::from_static("HIT"));
@@ -203,17 +203,20 @@ async fn extract_body(req: AxumRequest) -> Option<String> {
 
 fn build_axum_response(ssr_res: SsrResponse) -> AxumResponse {
   let status = StatusCode::from_u16(ssr_res.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-  let mut builder = AxumResponse::builder().status(status);
+  // Build response with status + body first, then apply headers via append()
+  // so that multi-value headers (Set-Cookie) are preserved.
+  let builder = AxumResponse::builder().status(status);
+  let mut response = safe_build_response(builder, ssr_res.body);
   for (k, v) in &ssr_res.headers {
     // Skip content-length — Axum/hyper computes it from the actual body.
     if k.eq_ignore_ascii_case("content-length") {
       continue;
     }
     if let (Ok(name), Ok(val)) = (k.parse::<HeaderName>(), v.parse::<HeaderValue>()) {
-      builder = builder.header(name, val);
+      response.headers_mut().append(name, val);
     }
   }
-  safe_build_response(builder, ssr_res.body)
+  response
 }
 
 /// Build an Axum response without panic.

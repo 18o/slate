@@ -29,7 +29,7 @@ pub struct SsrRequest {
 #[derive(Debug, Clone)]
 pub struct SsrResponse {
   pub status: u16,
-  pub headers: HashMap<String, String>,
+  pub headers: Vec<(String, String)>,
   pub body: String,
   /// Whether any fetch (internal dispatch or external HTTP) was called during this render.
   /// Pages that fetch dynamic data should not be cached.
@@ -52,6 +52,37 @@ type WorkerMsg = (SsrRequest, oneshot::Sender<anyhow::Result<SsrResponse>>);
 ///
 /// The engine is `Send + Sync` because the QuickJS runtime stays on the
 /// worker thread. Communication is via async channels.
+///
+/// ## Hydration
+///
+/// The engine renders full HTML on the server. Clients receive the complete
+/// HTML page, then SvelteKit (or Vue/React) client-side JavaScript
+/// "hydrates" the static DOM into an interactive SPA.
+///
+/// For correct hydration, SSR output MUST match client-side output bit-for-bit.
+/// Avoid browser-only APIs (`window`, `document`, `localStorage`) in SSR code
+/// paths. Use SvelteKit's `browser`/`$app/environment` guards, or Vue/React's
+/// `onMounted`/`useEffect` for browser-only logic.
+///
+/// Slate provides `navigator` and `self` stubs in its polyfills, but
+/// intentionally omits `window`, `document`, and `location` so that framework
+/// browser-detection (`typeof window !== 'undefined'`) works correctly.
+///
+/// ## Limitations
+///
+/// - **No streaming**: HTML is fully rendered before any bytes are sent.
+///   For pages with slow data fetches, the browser waits longer for first
+///   content. Mitigation: cache aggressively, pre-fetch in `load()` functions.
+///
+/// - **Serial rendering**: All renders go through a single QuickJS context.
+///   Under high concurrency, latency scales linearly. For production,
+///   create multiple engine instances (e.g., pool of 4).
+///
+/// - **devalue serialization**: SvelteKit uses `devalue` to serialize
+///   `load()` function return data into the HTML. This runs inside QuickJS
+///   and should produce identical output to V8/Node.js. If hydration fails
+///   with "data mismatch" errors, compare QuickJS vs Node.js `devalue` output
+///   for the same page.
 pub struct SsrEngine<D, F>
 where
   D: InternalDispatcher,
@@ -318,11 +349,24 @@ async fn do_render(ctx: &AsyncContext, req: SsrRequest, fetched: &AtomicBool) ->
     let status: u16 = result.get("status")?;
     let body: String = result.get("body")?;
 
-    let headers: HashMap<String, String> = result
-      .get::<_, Object>("headers")
-      .ok()
-      .and_then(|h| rquickjs_serde::from_value(h.into()).ok())
-      .unwrap_or_default();
+    let mut headers = Vec::new();
+    if let Ok(arr) = result.get::<_, rquickjs::Array>("headers") {
+      for i in 0..arr.len() {
+        if let Ok(inner) = arr.get::<rquickjs::Array>(i) {
+          let k: String = inner.get(0).unwrap_or_default();
+          let v: String = inner.get(1).unwrap_or_default();
+          headers.push((k, v));
+        }
+      }
+    }
+    // Fallback: try old HashMap format for backward compat
+    if headers.is_empty()
+      && let Ok(obj) = result.get::<_, Object>("headers")
+    {
+      headers = rquickjs_serde::from_value::<HashMap<String, String>>(obj.into())
+        .map(|m| m.into_iter().collect())
+        .unwrap_or_default();
+    }
 
     let did_fetch = fetched.load(Ordering::Relaxed);
 
@@ -408,17 +452,23 @@ struct DispatchResultJs(DispatchResult);
 
 impl<'js> rquickjs::IntoJs<'js> for DispatchResultJs {
   fn into_js(self, ctx: &rquickjs::Ctx<'js>) -> rquickjs::Result<rquickjs::Value<'js>> {
+    use rquickjs::Array;
     let obj = Object::new(ctx.clone())?;
     obj.set("status", self.0.status)?;
     // Convert binary body to string at the JS boundary — lossy for non-UTF-8
     let body_str = String::from_utf8_lossy(&self.0.body);
     obj.set("body", body_str.into_owned())?;
 
-    let headers_obj = Object::new(ctx.clone())?;
+    // Write headers as Array of [key, value] pairs — preserves multi-value
+    // headers (e.g. Set-Cookie) that would be lost in a plain JS Object.
+    let headers_arr = Array::new(ctx.clone())?;
     for (k, v) in &self.0.headers {
-      headers_obj.set(k.as_str(), v.as_str())?;
+      let pair = Array::new(ctx.clone())?;
+      pair.set(0, k.as_str())?;
+      pair.set(1, v.as_str())?;
+      headers_arr.set(headers_arr.len(), pair)?;
     }
-    obj.set("headers", headers_obj)?;
+    obj.set("headers", headers_arr)?;
 
     Ok(obj.into_value())
   }
