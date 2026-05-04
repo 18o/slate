@@ -4,6 +4,8 @@
 //! flow. Each web framework (Salvo, Axum, Actix) wraps this core with
 //! framework-specific request extraction and response building.
 
+use std::time::Duration;
+
 #[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
 use std::sync::Arc;
 #[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
@@ -17,12 +19,42 @@ use crate::shared::{CachedEntry, SsrCache, is_cacheable};
 #[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
 use crate::traits::{ExternalFetcher, InternalDispatcher};
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SsrConfig: user-facing configuration
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 /// Maximum body size for request payloads (10 MB).
 #[cfg(any(feature = "salvo", feature = "axum"))]
 pub const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
 
-/// 500 error page HTML returned when SSR rendering fails.
+/// Default 500 error page HTML returned when SSR rendering fails.
 pub const ERROR_PAGE_500: &str = "<html><body><h1>500 Internal Server Error</h1><p>SSR render failed</p></body></html>";
+
+/// Configuration for the SSR engine and handler.
+///
+/// All fields have sensible defaults — you only need to set what differs.
+///
+/// ```
+/// use slate::handler_common::SsrConfig;
+///
+/// let config = SsrConfig {
+///     render_timeout: std::time::Duration::from_secs(10),
+///     ..Default::default()
+/// };
+/// ```
+pub struct SsrConfig {
+  /// Custom 500 error page HTML. When `None`, a built-in page is used.
+  /// Set to `Some(include_str!("500.html"))` or `Some("<h1>Oops</h1>".into())`.
+  pub error_html: Option<String>,
+  /// Maximum time for a single `__render()` call. Default: 30 seconds.
+  pub render_timeout: Duration,
+}
+
+impl Default for SsrConfig {
+  fn default() -> Self {
+    Self { error_html: None, render_timeout: Duration::from_secs(30) }
+  }
+}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // IncomingRequest: framework-extracted request data
@@ -64,18 +96,20 @@ mod ssr_core {
   pub struct SsrHandlerCore<D: InternalDispatcher, F: ExternalFetcher> {
     engine: Arc<SsrEngine<D, F>>,
     cache: Arc<SsrCache>,
+    error_html: String,
   }
 
   impl<D: InternalDispatcher, F: ExternalFetcher> SsrHandlerCore<D, F> {
     /// Create a new handler wrapping the given engine.
-    pub fn new(engine: Arc<SsrEngine<D, F>>) -> Self {
-      Self { engine, cache: Arc::new(SsrCache::new()) }
+    pub fn new(engine: Arc<SsrEngine<D, F>>, config: &SsrConfig) -> Self {
+      let error_html = config.error_html.clone().unwrap_or_else(|| ERROR_PAGE_500.to_string());
+      Self { engine, cache: Arc::new(SsrCache::new()), error_html }
     }
 
     /// Create from pre-existing engine and cache (for Clone implementations).
     #[cfg(feature = "axum")]
     pub fn new_from_parts(engine: Arc<SsrEngine<D, F>>, cache: Arc<SsrCache>) -> Self {
-      Self { engine, cache }
+      Self { engine, cache, error_html: ERROR_PAGE_500.to_string() }
     }
 
     /// Get a reference to the cache (for framework-specific Clone impls).
@@ -88,6 +122,11 @@ mod ssr_core {
     #[cfg(any(feature = "axum", feature = "actix"))]
     pub fn engine(&self) -> &Arc<SsrEngine<D, F>> {
       &self.engine
+    }
+
+    /// Get the error page HTML (custom or default).
+    pub fn error_html(&self) -> String {
+      self.error_html.clone()
     }
 
     /// Execute the SSR render pipeline.

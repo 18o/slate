@@ -12,9 +12,6 @@ use tokio::sync::{mpsc, oneshot};
 use crate::polyfills;
 use crate::traits::{DispatchResult, ExternalFetcher, InternalDispatcher};
 
-/// Default timeout for a single render call (30 seconds).
-const RENDER_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// Request data passed from Salvo handler into QuickJS `__render()`.
 #[derive(Debug, Clone)]
 pub struct SsrRequest {
@@ -90,6 +87,7 @@ where
 {
   request_tx: mpsc::Sender<WorkerMsg>,
   worker_alive: Arc<AtomicBool>,
+  render_timeout: Duration,
   _worker_handle: Option<std::thread::JoinHandle<()>>,
   _phantom: PhantomData<(D, F)>,
 }
@@ -108,12 +106,12 @@ where
   /// 4. Enters an event loop, calling `__render()` for each request
   ///
   /// Blocks until initialization completes (or fails).
-  pub async fn new<T: RustEmbed>(dispatcher: D, fetcher: F) -> anyhow::Result<Self> {
+  pub async fn new<T: RustEmbed>(dispatcher: D, fetcher: F, render_timeout: Duration) -> anyhow::Result<Self> {
     let file =
       T::get("entry.js").ok_or_else(|| anyhow::anyhow!("'entry.js' not found in embedded assets. Did you build with adapter-quickjs?"))?;
     let bundle_source = Arc::new(String::from_utf8(file.data.to_vec()).map_err(|e| anyhow::anyhow!("entry.js is not valid UTF-8: {e}"))?);
 
-    tracing::info!("SsrEngine starting (bundle: {} bytes)", bundle_source.len());
+    tracing::info!("SsrEngine starting (bundle: {} bytes, timeout: {}s)", bundle_source.len(), render_timeout.as_secs());
 
     let bundle_size = bundle_source.len();
 
@@ -128,7 +126,7 @@ where
     let tokio_handle = tokio::runtime::Handle::current();
 
     let worker_handle = std::thread::spawn(move || {
-      worker_entry(req_rx, init_tx, dispatcher, fetcher, bundle_source, tokio_handle, alive_flag);
+      worker_entry(WorkerCtx { req_rx, init_tx, dispatcher, fetcher, bundle_source, tokio_handle, alive: alive_flag, render_timeout });
     });
 
     // Wait for worker to finish initialization
@@ -136,13 +134,13 @@ where
 
     tracing::info!("SsrEngine ready (bundle: {bundle_size} bytes)");
 
-    Ok(Self { request_tx: req_tx, worker_alive, _worker_handle: Some(worker_handle), _phantom: PhantomData })
+    Ok(Self { request_tx: req_tx, worker_alive, render_timeout, _worker_handle: Some(worker_handle), _phantom: PhantomData })
   }
 
   /// Render a page by calling `__render(request)` on the persistent context.
   ///
   /// Sends the request to the worker thread via channel and awaits the result.
-  /// Times out after 30 seconds if the JS function does not return.
+  /// Times out after [`render_timeout`] if the JS function does not return.
   ///
   /// Note: renders are processed serially on a single QuickJS context.
   /// For high concurrency, consider creating multiple engine instances.
@@ -155,9 +153,9 @@ where
       self.worker_alive.store(false, Ordering::Relaxed);
       anyhow::anyhow!("SSR worker exited")
     })?;
-    match tokio::time::timeout(RENDER_TIMEOUT, reply_rx).await {
+    match tokio::time::timeout(self.render_timeout, reply_rx).await {
       Ok(result) => result.map_err(|_| anyhow::anyhow!("SSR worker dropped"))?,
-      Err(_) => Err(anyhow::anyhow!("SSR render timed out after {}s", RENDER_TIMEOUT.as_secs())),
+      Err(_) => Err(anyhow::anyhow!("SSR render timed out after {}s", self.render_timeout.as_secs())),
     }
   }
 }
@@ -192,21 +190,31 @@ impl Drop for AliveGuard {
   }
 }
 
-/// Worker thread entry point.
-///
-/// Creates the QuickJS world once, then enters a request loop.
-fn worker_entry<D, F>(
-  mut req_rx: mpsc::Receiver<WorkerMsg>,
+/// Worker thread context — bundles all parameters to keep signatures manageable.
+struct WorkerCtx<D, F>
+where
+  D: InternalDispatcher,
+  F: ExternalFetcher,
+{
+  req_rx: mpsc::Receiver<WorkerMsg>,
   init_tx: oneshot::Sender<anyhow::Result<()>>,
   dispatcher: Arc<D>,
   fetcher: Arc<F>,
   bundle_source: Arc<String>,
   tokio_handle: tokio::runtime::Handle,
   alive: Arc<AtomicBool>,
-) where
+  render_timeout: Duration,
+}
+
+/// Worker thread entry point.
+///
+/// Creates the QuickJS world once, then enters a request loop.
+fn worker_entry<D, F>(ctx: WorkerCtx<D, F>)
+where
   D: InternalDispatcher,
   F: ExternalFetcher,
 {
+  let WorkerCtx { mut req_rx, init_tx, dispatcher, fetcher, bundle_source, tokio_handle, alive, render_timeout } = ctx;
   let local_rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
     Ok(rt) => rt,
     Err(e) => {
@@ -256,9 +264,7 @@ fn worker_entry<D, F>(
 
     // ── Event loop (reuse context) ───────────────
     while let Some((req, reply)) = req_rx.recv().await {
-      // Set interrupt handler to prevent JS infinite loops from blocking forever.
-      // The handler checks if RENDER_TIMEOUT has elapsed since the request started.
-      let deadline = std::time::Instant::now() + RENDER_TIMEOUT;
+      let deadline = std::time::Instant::now() + render_timeout;
       rt.set_interrupt_handler(Some(Box::new(move || std::time::Instant::now() > deadline))).await;
 
       // Reset fetched flag before each render

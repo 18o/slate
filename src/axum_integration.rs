@@ -23,7 +23,7 @@ use tower::Service;
 use tower::ServiceExt;
 
 use crate::engine::SsrResponse;
-use crate::handler_common::{self, SsrHandlerCore};
+use crate::handler_common::{self, SsrConfig, SsrHandlerCore};
 use crate::shared::ReqwestFetcher;
 use crate::traits::{DispatchResult, InternalDispatcher};
 
@@ -120,8 +120,8 @@ pub struct SsrHandler {
 
 impl SsrHandler {
   /// Create a new SsrHandler wrapping the given engine.
-  pub fn new(engine: Arc<crate::engine::SsrEngine<AxumDispatcher, ReqwestFetcher>>) -> Self {
-    Self { core: SsrHandlerCore::new(engine) }
+  pub fn new(engine: Arc<crate::engine::SsrEngine<AxumDispatcher, ReqwestFetcher>>, config: &SsrConfig) -> Self {
+    Self { core: SsrHandlerCore::new(engine, config) }
   }
 }
 
@@ -179,7 +179,7 @@ impl axum::handler::Handler<(), ()> for SsrHandler {
         }
         RenderOutcome::Error => safe_build_response(
           AxumResponse::builder().status(StatusCode::INTERNAL_SERVER_ERROR).header("content-type", "text/html; charset=utf-8"),
-          Body::from(handler_common::ERROR_PAGE_500),
+          Body::from(self.core.error_html()),
         ),
       }
     })
@@ -300,11 +300,21 @@ pub async fn init_ssr<T>(api_router: Router) -> anyhow::Result<Router>
 where
   T: RustEmbed + Send + Sync + 'static,
 {
+  init_ssr_with_config::<T>(api_router, SsrConfig::default()).await
+}
+
+/// Build a production-ready Axum Router with SSR in a single call,
+/// using a custom [`SsrConfig`].
+pub async fn init_ssr_with_config<T>(api_router: Router, config: SsrConfig) -> anyhow::Result<Router>
+where
+  T: RustEmbed + Send + Sync + 'static,
+{
+  let render_timeout = config.render_timeout;
   let dispatch_router = api_router.clone();
 
-  let engine = crate::engine::SsrEngine::new::<T>(AxumDispatcher::new(dispatch_router), ReqwestFetcher::new()?).await?;
+  let engine = crate::engine::SsrEngine::new::<T>(AxumDispatcher::new(dispatch_router), ReqwestFetcher::new()?, render_timeout).await?;
 
-  let handler = ProductionHandler::<T>::new(SsrHandler::new(Arc::new(engine)));
+  let handler = ProductionHandler::<T>::new(SsrHandler::new(Arc::new(engine), &config));
 
   Ok(api_router.fallback(handler))
 }

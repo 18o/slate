@@ -18,7 +18,7 @@ use actix_web::{HttpRequest, HttpResponse, web};
 use rust_embed::RustEmbed;
 
 use crate::engine::{SsrEngine, SsrRequest};
-use crate::handler_common::{ERROR_PAGE_500, IncomingRequest, RenderOutcome, SsrHandlerCore};
+use crate::handler_common::{IncomingRequest, RenderOutcome, SsrConfig, SsrHandlerCore};
 use crate::shared::ReqwestFetcher;
 use crate::static_files::{self, StaticAsset};
 use crate::traits::{DispatchResult, InternalDispatcher};
@@ -129,7 +129,7 @@ pub struct SsrHandler {
 
 impl Clone for SsrHandler {
   fn clone(&self) -> Self {
-    Self { core: SsrHandlerCore::new(self.core.engine().clone()) }
+    Self { core: SsrHandlerCore::new(self.core.engine().clone(), &SsrConfig::default()) }
   }
 }
 
@@ -161,7 +161,7 @@ pub async fn ssr_handler<T: RustEmbed + 'static>(req: HttpRequest, body: web::By
     RenderOutcome::CacheHit(cached) => build_ssr_response(cached.status, &cached.headers, &cached.body, "HIT"),
     RenderOutcome::Rendered(ssr_res) => build_ssr_response(ssr_res.status, &ssr_res.headers, &ssr_res.body, "MISS"),
     RenderOutcome::Error => {
-      HttpResponse::InternalServerError().insert_header(("content-type", "text/html; charset=utf-8")).body(ERROR_PAGE_500)
+      HttpResponse::InternalServerError().insert_header(("content-type", "text/html; charset=utf-8")).body(state.core.error_html())
     }
   }
 }
@@ -243,8 +243,18 @@ where
   T: RustEmbed + Send + Sync + 'static,
   F: Fn(&mut web::ServiceConfig) + Clone + Send + Sync + 'static,
 {
-  let dispatcher = ActixDispatcher::new(Arc::new(api_config));
-  let engine = SsrEngine::new::<T>(dispatcher, ReqwestFetcher::new()?).await?;
+  init_ssr_with_config::<T, F>(api_config, SsrConfig::default()).await
+}
 
-  Ok(SsrHandler { core: SsrHandlerCore::new(Arc::new(engine)) })
+/// Create the SSR engine with custom [`SsrConfig`]. Returns an [`SsrHandler`] for `web::Data`.
+pub async fn init_ssr_with_config<T, F>(api_config: F, config: SsrConfig) -> anyhow::Result<SsrHandler>
+where
+  T: RustEmbed + Send + Sync + 'static,
+  F: Fn(&mut web::ServiceConfig) + Clone + Send + Sync + 'static,
+{
+  let render_timeout = config.render_timeout;
+  let dispatcher = ActixDispatcher::new(Arc::new(api_config));
+  let engine = SsrEngine::new::<T>(dispatcher, ReqwestFetcher::new()?, render_timeout).await?;
+
+  Ok(SsrHandler { core: SsrHandlerCore::new(Arc::new(engine), &config) })
 }

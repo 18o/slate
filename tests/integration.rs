@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rust_embed::RustEmbed;
 use slate::{DispatchResult, ExternalFetcher, InternalDispatcher, SsrEngine, SsrRequest};
@@ -55,13 +56,13 @@ impl ExternalFetcher for MockFetcher {
 
 #[tokio::test]
 async fn test_engine_new_loads_bundle() {
-  let engine = SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher).await;
+  let engine = SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher, Duration::from_secs(3)).await;
   assert!(engine.is_ok(), "Engine creation should succeed: {:?}", engine.err());
 }
 
 #[tokio::test]
 async fn test_render_basic_get() {
-  let engine = SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher).await.unwrap();
+  let engine = SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher, Duration::from_secs(3)).await.unwrap();
 
   let req = SsrRequest {
     method: "GET".to_string(),
@@ -84,7 +85,7 @@ async fn test_render_basic_get() {
 
 #[tokio::test]
 async fn test_render_post_with_body_and_headers() {
-  let engine = SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher).await.unwrap();
+  let engine = SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher, Duration::from_secs(3)).await.unwrap();
 
   let mut headers = HashMap::new();
   headers.insert("content-type".to_string(), "application/json".to_string());
@@ -110,7 +111,7 @@ async fn test_render_post_with_body_and_headers() {
 
 #[tokio::test]
 async fn test_render_request_isolation() {
-  let engine = SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher).await.unwrap();
+  let engine = SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher, Duration::from_secs(3)).await.unwrap();
 
   let req1 = SsrRequest {
     method: "GET".to_string(),
@@ -143,7 +144,7 @@ async fn test_render_request_isolation() {
 
 #[tokio::test]
 async fn test_polyfills_text_encoder_decoder() {
-  let engine = SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher).await.unwrap();
+  let engine = SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher, Duration::from_secs(3)).await.unwrap();
 
   let req = SsrRequest {
     method: "GET".to_string(),
@@ -162,7 +163,7 @@ async fn test_polyfills_text_encoder_decoder() {
 
 #[tokio::test]
 async fn test_concurrent_renders() {
-  let engine = Arc::new(SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher).await.unwrap());
+  let engine = Arc::new(SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher, Duration::from_secs(3)).await.unwrap());
 
   let mut handles = Vec::new();
   for i in 0..5 {
@@ -197,7 +198,7 @@ async fn test_internal_dispatch_from_js() {
 
   // Since we can't easily have multiple "entry.js" files, we test dispatch
   // by verifying the engine injects the functions without error.
-  let engine = SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher).await.unwrap();
+  let engine = SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher, Duration::from_secs(3)).await.unwrap();
 
   // The engine was created successfully, meaning:
   // 1. Polyfills were injected
@@ -229,8 +230,9 @@ struct ThrowAssets;
 
 #[tokio::test]
 async fn test_js_exception_returns_error() {
-  let engine =
-    SsrEngine::new::<ThrowAssets>(MockDispatcher::new(), MockFetcher).await.expect("Engine should start even if __render will throw");
+  let engine = SsrEngine::new::<ThrowAssets>(MockDispatcher::new(), MockFetcher, Duration::from_secs(3))
+    .await
+    .expect("Engine should start even if __render will throw");
 
   let req = SsrRequest {
     method: "GET".to_string(),
@@ -255,7 +257,7 @@ async fn test_js_exception_returns_error() {
 async fn test_js_exception_does_not_crash_engine() {
   // After a JS exception, the engine should still work for subsequent requests.
   // We use the normal TestAssets for the "recovery" request.
-  let engine = SsrEngine::new::<ThrowAssets>(MockDispatcher::new(), MockFetcher).await.unwrap();
+  let engine = SsrEngine::new::<ThrowAssets>(MockDispatcher::new(), MockFetcher, Duration::from_secs(3)).await.unwrap();
 
   let req = SsrRequest {
     method: "GET".to_string(),
@@ -323,7 +325,7 @@ struct HangAssets;
 #[tokio::test]
 async fn test_normal_render_completes_within_timeout() {
   // Verify a normal render completes quickly (within 5s, well under the 30s timeout).
-  let engine = SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher).await.unwrap();
+  let engine = SsrEngine::new::<TestAssets>(MockDispatcher::new(), MockFetcher, Duration::from_secs(3)).await.unwrap();
 
   let req = SsrRequest {
     method: "GET".to_string(),
@@ -353,7 +355,7 @@ struct MinimalAssets;
 
 #[tokio::test]
 async fn test_minimal_iife_renders() {
-  let engine = SsrEngine::new::<MinimalAssets>(MockDispatcher::new(), MockFetcher)
+  let engine = SsrEngine::new::<MinimalAssets>(MockDispatcher::new(), MockFetcher, Duration::from_secs(3))
     .await
     .expect("Engine creation with minimal IIFE should succeed");
 
@@ -375,10 +377,7 @@ async fn test_minimal_iife_renders() {
     &res.body[..res.body.len().min(500)]
   );
 
-  assert!(
-    res.body.contains("method: GET"),
-    "Expected body to contain request method",
-  );
+  assert!(res.body.contains("method: GET"), "Expected body to contain request method",);
 
   let ct = res.headers.iter().find(|(k, _)| k == "content-type").map(|(_, v)| v.clone()).unwrap_or_default();
   assert_eq!(ct, "text/html; charset=utf-8", "Expected text/html content-type, got: {ct}");

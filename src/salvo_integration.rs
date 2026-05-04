@@ -5,6 +5,7 @@
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::Duration;
 
 use http_body_util::BodyExt;
 use rust_embed::RustEmbed;
@@ -17,7 +18,7 @@ use salvo::routing::Router;
 use salvo::{Depot, FlowCtrl, Request, Response, Service};
 
 use crate::engine::SsrResponse;
-use crate::handler_common::{self, SsrHandlerCore};
+use crate::handler_common::{self, SsrConfig, SsrHandlerCore};
 use crate::shared::ReqwestFetcher;
 use crate::traits::{DispatchResult, InternalDispatcher};
 
@@ -135,8 +136,8 @@ pub struct SsrHandler {
 
 impl SsrHandler {
   /// Create a new SsrHandler wrapping the given engine.
-  pub fn new(engine: Arc<crate::engine::SsrEngine<SalvoDispatcher, ReqwestFetcher>>) -> Self {
-    Self { core: SsrHandlerCore::new(engine) }
+  pub fn new(engine: Arc<crate::engine::SsrEngine<SalvoDispatcher, ReqwestFetcher>>, config: &SsrConfig) -> Self {
+    Self { core: SsrHandlerCore::new(engine, config) }
   }
 }
 
@@ -177,7 +178,7 @@ impl SalvoHandler for SsrHandler {
       RenderOutcome::Error => {
         res.status_code = Some(StatusCode::INTERNAL_SERVER_ERROR);
         let _ = res.headers.insert(http::header::CONTENT_TYPE, http::header::HeaderValue::from_static("text/html; charset=utf-8"));
-        res.body = ResBody::Once(handler_common::ERROR_PAGE_500.into());
+        res.body = ResBody::Once(self.core.error_html().into());
       }
     }
   }
@@ -286,11 +287,23 @@ where
   F: Fn() -> Fut,
   Fut: Future<Output = Router>,
 {
+  init_ssr_with_config::<T, F, Fut>(router_factory, SsrConfig::default()).await
+}
+
+/// Build a production-ready router with SSR in a single call,
+/// using a custom [`SsrConfig`].
+pub async fn init_ssr_with_config<T, F, Fut>(router_factory: F, config: SsrConfig) -> anyhow::Result<Router>
+where
+  T: RustEmbed + Send + Sync + 'static,
+  F: Fn() -> Fut,
+  Fut: Future<Output = Router>,
+{
+  let render_timeout = config.render_timeout;
   let dispatch_router = router_factory().await;
   let dispatch_service = Arc::new(Service::new(dispatch_router));
 
-  let engine = crate::engine::SsrEngine::new::<T>(SalvoDispatcher::new(dispatch_service), ReqwestFetcher::new()?).await?;
-  let handler = engine.handler();
+  let engine = crate::engine::SsrEngine::new::<T>(SalvoDispatcher::new(dispatch_service), ReqwestFetcher::new()?, render_timeout).await?;
+  let handler = engine.handler(&config);
 
   let main_router = router_factory().await.push(Router::with_path("{*rest}").goal(ProductionHandler::<T>::new(handler)));
 
@@ -304,11 +317,11 @@ where
 impl crate::engine::SsrEngine<SalvoDispatcher, ReqwestFetcher> {
   /// Create engine with Salvo dispatcher and reqwest fetcher.
   pub async fn with_salvo<T: RustEmbed>(service: Arc<Service>) -> anyhow::Result<Self> {
-    Self::new::<T>(SalvoDispatcher::new(service), ReqwestFetcher::new()?).await
+    Self::new::<T>(SalvoDispatcher::new(service), ReqwestFetcher::new()?, Duration::from_secs(30)).await
   }
 
   /// Create a Salvo-compatible Handler for this engine.
-  pub fn handler(self) -> SsrHandler {
-    SsrHandler::new(Arc::new(self))
+  pub fn handler(self, config: &SsrConfig) -> SsrHandler {
+    SsrHandler::new(Arc::new(self), config)
   }
 }

@@ -6,6 +6,7 @@
 #![cfg(feature = "axum")]
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::Request as AxumRequest;
@@ -16,6 +17,7 @@ use http_body_util::BodyExt;
 use rust_embed::RustEmbed;
 
 use slate::axum::{AxumDispatcher, ReqwestFetcher, SsrHandler};
+use slate::handler_common::SsrConfig;
 use slate::{InternalDispatcher, SsrEngine};
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -128,9 +130,11 @@ async fn test_axum_ssr_handler_renders_page() {
   let api_router = axum::Router::new().route("/api/hello", get(api_hello));
   let dispatcher = AxumDispatcher::new(api_router);
 
-  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new().unwrap()).await.expect("Engine creation should succeed");
+  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new().unwrap(), Duration::from_secs(3))
+    .await
+    .expect("Engine creation should succeed");
 
-  let handler = SsrHandler::new(Arc::new(engine));
+  let handler = SsrHandler::new(Arc::new(engine), &SsrConfig::default());
 
   let req = AxumRequest::builder().method(Method::GET).uri("/test-page").body(Body::empty()).unwrap();
 
@@ -151,8 +155,8 @@ async fn test_axum_ssr_handler_caches_get_requests() {
   let api_router = axum::Router::new().route("/api/hello", get(api_hello));
   let dispatcher = AxumDispatcher::new(api_router);
 
-  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new().unwrap()).await.unwrap();
-  let handler = SsrHandler::new(Arc::new(engine));
+  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new().unwrap(), Duration::from_secs(3)).await.unwrap();
+  let handler = SsrHandler::new(Arc::new(engine), &SsrConfig::default());
 
   // First request — MISS
   let req1 = AxumRequest::builder().method(Method::GET).uri("/cached-page").body(Body::empty()).unwrap();
@@ -176,8 +180,8 @@ async fn test_axum_ssr_handler_does_not_cache_post() {
   let api_router = axum::Router::new().route("/api/data", post(api_echo));
   let dispatcher = AxumDispatcher::new(api_router);
 
-  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new().unwrap()).await.unwrap();
-  let handler = SsrHandler::new(Arc::new(engine));
+  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new().unwrap(), Duration::from_secs(3)).await.unwrap();
+  let handler = SsrHandler::new(Arc::new(engine), &SsrConfig::default());
 
   let req = AxumRequest::builder().method(Method::POST).uri("/submit").body(Body::from(r#"{"data":"test"}"#)).unwrap();
 
