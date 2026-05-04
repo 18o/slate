@@ -41,6 +41,7 @@
 //! - `salvo` — `slate::salvo::*`
 //! - `axum`  — `slate::axum::*`
 //! - `actix` — `slate::actix::*`
+//! - `warp`  — `slate::warp::*`
 
 mod engine;
 mod polyfills;
@@ -50,15 +51,15 @@ pub use engine::{SsrEngine, SsrRequest, SsrResponse};
 pub use traits::{DispatchResult, ExternalFetcher, InternalDispatcher};
 
 // Shared types between web framework integrations
-#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix", feature = "warp"))]
 mod shared;
 
 // Shared SSR render pipeline
-#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix", feature = "warp"))]
 pub mod handler_common;
 
 // Static file serving from RustEmbed
-#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix", feature = "warp"))]
 mod static_files;
 
 #[cfg(feature = "salvo")]
@@ -93,4 +94,16 @@ pub mod actix {
   pub use crate::handler_common::SsrHandlerCore;
   pub use crate::shared::{CachedEntry, ReqwestFetcher, SsrCache};
   pub use crate::static_files::StaticAsset;
+}
+
+#[cfg(feature = "warp")]
+mod warp_integration;
+
+#[cfg(feature = "warp")]
+pub mod warp {
+  //! Warp integration — re-exports for `slate::warp::*`.
+  pub use crate::handler_common::{SsrConfig, SsrHandlerCore};
+  pub use crate::shared::{CachedEntry, ReqwestFetcher, SsrCache};
+  pub use crate::static_files::StaticAsset;
+  pub use crate::warp_integration::{WarpDispatcher, init_ssr};
 }

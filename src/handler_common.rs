@@ -6,15 +6,16 @@
 
 use std::time::Duration;
 
-#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix", feature = "warp"))]
 use std::time::Instant;
 
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix", feature = "warp"))]
 use crate::engine::SsrRequest;
-#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix", feature = "warp"))]
 use crate::engine::{SsrEngine, SsrResponse};
-#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix", feature = "warp"))]
 use crate::shared::{CachedEntry, SsrCache, is_cacheable};
-#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix", feature = "warp"))]
 use crate::traits::{ExternalFetcher, InternalDispatcher};
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -66,7 +67,7 @@ impl Default for SsrConfig {
 /// Framework handlers extract these from their request types, then pass
 /// the struct to [`SsrHandlerCore::handle`]. This avoids per-framework
 /// argument unpacking in the shared render pipeline.
-#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix", feature = "warp"))]
 #[derive(Debug)]
 pub struct IncomingRequest {
   /// URL path component (used for cache key).
@@ -81,10 +82,10 @@ pub struct IncomingRequest {
 // SsrHandlerCore: framework-agnostic render pipeline
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix", feature = "warp"))]
 pub use self::ssr_core::*;
 
-#[cfg(any(feature = "salvo", feature = "axum", feature = "actix"))]
+#[cfg(any(feature = "salvo", feature = "axum", feature = "actix", feature = "warp"))]
 mod ssr_core {
   use super::*;
   use parking_lot::Mutex;

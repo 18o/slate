@@ -247,9 +247,8 @@ where
     rt.set_max_stack_size(512 * 1024).await;
 
     let fetched = Arc::new(AtomicBool::new(false));
-    let rendering = Arc::new(AtomicBool::new(false));
 
-    let ctx = match init_context(&rt, &dispatcher, &fetcher, &bundle_source, fetched.clone(), rendering.clone()).await {
+    let ctx = match init_context(&rt, &dispatcher, &fetcher, &bundle_source, fetched.clone()).await {
       Ok(ctx) => ctx,
       Err(e) => {
         let _ = init_tx.send(Err(e));
@@ -269,13 +268,10 @@ where
 
       // Reset fetched flag before each render
       fetched.store(false, Ordering::Relaxed);
-      // Mark as rendering — prevents recursive internal dispatch (deadlock guard)
-      rendering.store(true, Ordering::Relaxed);
 
       let result = do_render(&ctx, req, &fetched).await;
 
-      // Clear rendering flag and interrupt handler after each render
-      rendering.store(false, Ordering::Relaxed);
+      // Clear interrupt handler after each render
       rt.set_interrupt_handler(None).await;
 
       if reply.send(result).is_err() {
@@ -292,7 +288,6 @@ async fn init_context<D, F>(
   fetcher: &Arc<F>,
   bundle_source: &Arc<String>,
   fetched: Arc<AtomicBool>,
-  rendering: Arc<AtomicBool>,
 ) -> anyhow::Result<AsyncContext>
 where
   D: InternalDispatcher,
@@ -308,7 +303,7 @@ where
     polyfills::inject(&ctx)
       .map_err(|e| anyhow::anyhow!("Failed to inject polyfills: {e}"))?;
 
-    inject_fetch_functions(&ctx, &disp, &fetch, fetched, rendering)
+    inject_fetch_functions(&ctx, &disp, &fetch, fetched)
       .map_err(|e| anyhow::anyhow!("Failed to inject fetch functions: {e}"))?;
 
     ctx.eval::<(), _>(source.as_str())
@@ -392,15 +387,11 @@ async fn do_render(ctx: &AsyncContext, req: SsrRequest, fetched: &AtomicBool) ->
 /// so that `do_render` can detect whether the page performed dynamic data fetching.
 /// The flag is shared via `Arc<AtomicBool>` — safe because renders are serial
 /// (single worker thread, single context).
-///
-/// The `rendering` flag prevents recursive internal dispatch that would deadlock
-/// the single-worker event loop (e.g., page `/foo` internally fetches `/foo`).
 fn inject_fetch_functions<D, F>(
   ctx: &Ctx<'_>,
   dispatcher: &Arc<D>,
   fetcher: &Arc<F>,
   fetched: Arc<AtomicBool>,
-  rendering: Arc<AtomicBool>,
 ) -> Result<(), rquickjs::Error>
 where
   D: InternalDispatcher,
@@ -410,7 +401,6 @@ where
 
   let disp = dispatcher.clone();
   let f1 = fetched.clone();
-  let ren = rendering.clone();
   globals.set(
     "__rust_internal_dispatch",
     Func::from(Async(move |method: String, path: String, body: Option<String>, headers: Object| {
@@ -418,13 +408,10 @@ where
       let hdrs = extract_headers(headers);
       let body_bytes = body.as_deref().map(|b| b.as_bytes()).map(|b| b.to_vec());
       let disp = disp.clone();
-      let is_recursive = ren.load(Ordering::Relaxed);
       async move {
-        // Deadlock guard: if we're already rendering, a recursive internal
-        // dispatch would send to the channel and wait forever (single worker).
-        if is_recursive {
-          return DispatchResultJs(DispatchResult::error(503, "recursive internal dispatch detected"));
-        }
+        // Safety: The dispatcher uses an API-only router (no SSR catch-all).
+        // Recursive SSR deadlock is impossible because the dispatch router
+        // returns 404 for page paths, never calling engine.render().
         let result = disp.dispatch(&method, &path, body_bytes.as_deref(), &hdrs).await;
         DispatchResultJs(result)
       }

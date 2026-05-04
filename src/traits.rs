@@ -12,12 +12,10 @@ pub struct DispatchResult {
 
 impl DispatchResult {
   /// Create an error response with a JSON body and `content-type: application/json`.
+  /// Uses `serde_json` for safe JSON construction (no injection risk).
   pub fn error(status: u16, message: &str) -> Self {
-    Self {
-      status,
-      headers: vec![("content-type".to_string(), "application/json".to_string())],
-      body: format!(r#"{{"error":"{message}"}}"#).into_bytes(),
-    }
+    let body = serde_json::json!({ "error": message }).to_string().into_bytes();
+    Self { status, headers: vec![("content-type".to_string(), "application/json".to_string())], body }
   }
 }
 

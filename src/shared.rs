@@ -27,6 +27,10 @@ impl ReqwestFetcher {
   pub fn new() -> anyhow::Result<Self> {
     let client = reqwest::Client::builder()
       .timeout(std::time::Duration::from_secs(10))
+      .connect_timeout(std::time::Duration::from_secs(3))
+      // Disable automatic redirect following — avoids SSRF bypass where
+      // a redirect target is an internal address that passes the initial check.
+      .redirect(reqwest::redirect::Policy::none())
       .build()
       .map_err(|e| anyhow::anyhow!("failed to create reqwest client: {e}"))?;
     Ok(Self { client })
@@ -45,6 +49,12 @@ fn is_url_allowed(url: &str) -> bool {
     Ok(u) => u,
     Err(_) => return false,
   };
+
+  // Only HTTP(S) allowed — rejects file://, data://, javascript:, etc.
+  match parsed.scheme() {
+    "http" | "https" => {}
+    _ => return false,
+  }
 
   let host = match parsed.host_str() {
     Some(h) => h,
@@ -138,7 +148,7 @@ impl ExternalFetcher for ReqwestFetcher {
     }
 
     match req.send().await {
-      Ok(resp) => {
+      Ok(mut resp) => {
         let status = resp.status().as_u16();
 
         // Enforce body size limit
@@ -151,21 +161,27 @@ impl ExternalFetcher for ReqwestFetcher {
 
         let hdrs: Vec<(String, String)> =
           resp.headers().iter().map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string())).collect();
-        let body_bytes = match resp.bytes().await {
-          Ok(bytes) => bytes,
-          Err(e) => {
-            tracing::warn!("SSR external fetch: failed to read response body ({method} {url}): {e}");
-            return DispatchResult { status, headers: hdrs, body: Vec::new() };
-          }
-        };
 
-        // Final size check for chunked responses
-        if body_bytes.len() > MAX_EXTERNAL_BODY_SIZE {
-          tracing::warn!("SSR external fetch: chunked response too large ({} bytes) — {method} {url}", body_bytes.len());
-          return DispatchResult::error(502, "response body exceeds size limit");
+        // Stream body — enforce size limit incrementally (prevents OOM on large responses)
+        let mut body = Vec::with_capacity(64 * 1024);
+        loop {
+          match resp.chunk().await {
+            Ok(Some(bytes)) => {
+              body.extend_from_slice(&bytes);
+              if body.len() > MAX_EXTERNAL_BODY_SIZE {
+                tracing::warn!("SSR external fetch: response too large ({} bytes) — {method} {url}", body.len());
+                return DispatchResult::error(502, "response body exceeds size limit");
+              }
+            }
+            Ok(None) => break, // end of body
+            Err(e) => {
+              tracing::warn!("SSR external fetch: failed to read body chunk ({method} {url}): {e}");
+              return DispatchResult { status, headers: hdrs, body };
+            }
+          }
         }
 
-        DispatchResult { status, headers: hdrs, body: body_bytes.to_vec() }
+        DispatchResult { status, headers: hdrs, body }
       }
       Err(e) => {
         tracing::error!("SSR external fetch failed: {method} {url} — {e}");

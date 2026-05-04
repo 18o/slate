@@ -11,6 +11,7 @@ default = []
 salvo = ["dep:salvo", "dep:reqwest", "dep:http-body-util", "dep:mime_guess", "dep:parking_lot", "salvo/test"]
 axum = ["dep:axum", "dep:tower", "dep:reqwest", "dep:http-body-util", "dep:mime_guess", "dep:parking_lot"]
 actix = ["dep:actix-web", "dep:reqwest", "dep:http-body-util", "dep:mime_guess", "dep:parking_lot"]
+warp = ["dep:warp", "dep:tower-service", "dep:reqwest", "dep:http-body-util", "dep:mime_guess", "dep:parking_lot"]
 
 [dependencies]
 # QuickJS bindings
@@ -61,6 +62,10 @@ tower = { version = "0.5", default-features = false, optional = true }
 
 # ── Actix integration (optional) ──
 actix-web = { version = "4", default-features = false, optional = true }
+
+# ── Warp integration (optional) ──
+warp = { version = "0.4", default-features = false, features = ["server"], optional = true }
+tower-service = { version = "0.3", optional = true }
 
 # ── Shared between Salvo & Axum ──
 reqwest = { version = "0.13", default-features = false, features = [
