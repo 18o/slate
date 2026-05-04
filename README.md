@@ -225,6 +225,10 @@ slate = { version = "0.1", features = ["salvo"] }  # + Salvo integration
 slate = { version = "0.1", features = ["axum"] }   # + Axum integration
 ```
 
+## Testing status
+
+> **Note:** Currently only **SvelteKit + Salvo** has been tested in production. Other combinations (SvelteKit + Axum, Vue + Salvo, React + Axum, etc.) have not been verified yet. The adapters and integrations are implemented but may need minor adjustments for real-world use.
+
 ## Performance
 
 The QuickJS context is initialized **once** at startup (eval bundle, inject polyfills). Each `render()` call only invokes `__render()` on the persistent context — no thread spawn, no re-compilation.

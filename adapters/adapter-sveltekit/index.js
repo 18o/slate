@@ -12,7 +12,7 @@ export default function (options = {}) {
   } = options;
 
   return {
-    name: '@twist/adapter-quickjs',
+    name: '@slate/adapter-quickjs',
 
     async adapt(builder) {
       // 1. Clean output directory
@@ -31,7 +31,7 @@ export default function (options = {}) {
 
       // 4. Generate server-entry.js (temporary file, rolldown entry point)
       const entryContent = generateServerEntry(manifest);
-      const entryTmpPath = join(serverDir, '_twist_entry.js');
+      const entryTmpPath = join(serverDir, '_slate_entry.js');
       writeFileSync(entryTmpPath, entryContent);
 
       // 5. Bundle with rolldown → IIFE single file
@@ -40,6 +40,12 @@ export default function (options = {}) {
         resolve: {
           // Resolve node_modules packages
         },
+        external: [
+          // SvelteKit dynamically imports node:async_hooks for AsyncLocalStorage
+          // in dev mode — never used in production SSR. Mark as external to
+          // suppress UNRESOLVED_IMPORT warnings.
+          'node:async_hooks',
+        ],
         plugins: [],
         onLog(level, log) {
           // Suppress known harmless warnings
@@ -80,7 +86,7 @@ export default function (options = {}) {
 }
 
 function generateServerEntry(manifest) {
-  return `// @twist/adapter-quickjs — server entry (bundled to IIFE)
+  return `// @slate/adapter-quickjs — server entry (bundled to IIFE)
 // This file is the temporary rolldown entry point.
 // After bundling, the output is a single IIFE entry.js with no imports.
 
@@ -104,6 +110,7 @@ const _initPromise = server.init({
 
 // Track whether init completed successfully
 var _initDone = false;
+var _initError = null;
 
 // ━━ __render Entry Point ━━
 // Called by SsrEngine::render() for each SSR request.
@@ -114,15 +121,19 @@ globalThis.__render = async function(request) {
       await _initPromise;
       _initDone = true;
     } catch(e) {
-      _initDone = true; // Don't retry on every request
+      _initError = e;
+      _initDone = true;
       throw new Error('SvelteKit server.init() failed: ' + (e && e.message || String(e)));
     }
+  }
+  if (_initError) {
+    throw new Error('SvelteKit server.init() failed: ' + (_initError && _initError.message || String(_initError)));
   }
 
   const webRequest = new Request(request.url, {
     method: request.method,
     headers: new Headers(request.headers || {}),
-    body: request.body || undefined,
+    body: request.body != null ? request.body : undefined,
   });
 
   const response = await server.respond(webRequest, {
@@ -138,18 +149,24 @@ globalThis.__render = async function(request) {
   if (!body && response.body) {
     if (typeof response.body === 'string') body = response.body;
     else if (response.body instanceof Uint8Array) {
-      var arr = response.body;
-      var chunks = [];
-      for (var ci = 0; ci < arr.length; ci += 0x8000) {
-        chunks.push(String.fromCharCode.apply(null, arr.subarray(ci, ci + 0x8000)));
-      }
-      body = chunks.join('');
+      body = new TextDecoder().decode(response.body);
     }
   }
 
+  // Serialize headers — merge multi-value headers (e.g. set-cookie) with ", " joining
+  // per WHATWG spec. Object.fromEntries would lose duplicate keys.
+  var hdrs = {};
+  response.headers.forEach(function(v, k) {
+    if (k in hdrs) {
+      hdrs[k] = hdrs[k] + ', ' + v;
+    } else {
+      hdrs[k] = v;
+    }
+  });
+
   return {
     status: response.status,
-    headers: Object.fromEntries(response.headers),
+    headers: hdrs,
     body: body || '',
   };
 };

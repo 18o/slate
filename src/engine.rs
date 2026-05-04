@@ -31,6 +31,9 @@ pub struct SsrResponse {
   pub status: u16,
   pub headers: HashMap<String, String>,
   pub body: String,
+  /// Whether any fetch (internal dispatch or external HTTP) was called during this render.
+  /// Pages that fetch dynamic data should not be cached.
+  pub fetched: bool,
 }
 
 type WorkerMsg = (SsrRequest, oneshot::Sender<anyhow::Result<SsrResponse>>);
@@ -56,6 +59,7 @@ where
 {
   request_tx: mpsc::Sender<WorkerMsg>,
   worker_alive: Arc<AtomicBool>,
+  _worker_handle: Option<std::thread::JoinHandle<()>>,
   _phantom: PhantomData<(D, F)>,
 }
 
@@ -92,7 +96,7 @@ where
     let fetcher = Arc::new(fetcher);
     let tokio_handle = tokio::runtime::Handle::current();
 
-    std::thread::spawn(move || {
+    let worker_handle = std::thread::spawn(move || {
       worker_entry(req_rx, init_tx, dispatcher, fetcher, bundle_source, tokio_handle, alive_flag);
     });
 
@@ -101,7 +105,7 @@ where
 
     tracing::info!("SsrEngine ready (bundle: {bundle_size} bytes)");
 
-    Ok(Self { request_tx: req_tx, worker_alive, _phantom: PhantomData })
+    Ok(Self { request_tx: req_tx, worker_alive, _worker_handle: Some(worker_handle), _phantom: PhantomData })
   }
 
   /// Render a page by calling `__render(request)` on the persistent context.
@@ -124,6 +128,27 @@ where
       Ok(result) => result.map_err(|_| anyhow::anyhow!("SSR worker dropped"))?,
       Err(_) => Err(anyhow::anyhow!("SSR render timed out after {}s", RENDER_TIMEOUT.as_secs())),
     }
+  }
+}
+
+impl<D, F> Drop for SsrEngine<D, F>
+where
+  D: InternalDispatcher,
+  F: ExternalFetcher,
+{
+  fn drop(&mut self) {
+    // Drop the sender first — this causes the worker's recv() to return None,
+    // ending the event loop. The worker thread will then exit and the
+    // AliveGuard will mark it as dead.
+    drop(std::mem::replace(&mut self.request_tx, {
+      // Create a dummy closed channel to satisfy the type system.
+      // The worker will exit because the real sender was dropped.
+      let (tx, _rx) = mpsc::channel::<WorkerMsg>(1);
+      // Drop the receiver immediately — channel is closed.
+      drop(_rx);
+      tx
+    }));
+    tracing::debug!("SsrEngine dropped, worker channel closed");
   }
 }
 
@@ -182,7 +207,10 @@ fn worker_entry<D, F>(
     rt.set_memory_limit(10 * 1024 * 1024).await;
     rt.set_max_stack_size(512 * 1024).await;
 
-    let ctx = match init_context(&rt, &dispatcher, &fetcher, &bundle_source).await {
+    let fetched = Arc::new(AtomicBool::new(false));
+    let rendering = Arc::new(AtomicBool::new(false));
+
+    let ctx = match init_context(&rt, &dispatcher, &fetcher, &bundle_source, fetched.clone(), rendering.clone()).await {
       Ok(ctx) => ctx,
       Err(e) => {
         let _ = init_tx.send(Err(e));
@@ -202,9 +230,15 @@ fn worker_entry<D, F>(
       let deadline = std::time::Instant::now() + RENDER_TIMEOUT;
       rt.set_interrupt_handler(Some(Box::new(move || std::time::Instant::now() > deadline))).await;
 
-      let result = do_render(&ctx, req).await;
+      // Reset fetched flag before each render
+      fetched.store(false, Ordering::Relaxed);
+      // Mark as rendering — prevents recursive internal dispatch (deadlock guard)
+      rendering.store(true, Ordering::Relaxed);
 
-      // Clear interrupt handler after each render
+      let result = do_render(&ctx, req, &fetched).await;
+
+      // Clear rendering flag and interrupt handler after each render
+      rendering.store(false, Ordering::Relaxed);
       rt.set_interrupt_handler(None).await;
 
       if reply.send(result).is_err() {
@@ -220,6 +254,8 @@ async fn init_context<D, F>(
   dispatcher: &Arc<D>,
   fetcher: &Arc<F>,
   bundle_source: &Arc<String>,
+  fetched: Arc<AtomicBool>,
+  rendering: Arc<AtomicBool>,
 ) -> anyhow::Result<AsyncContext>
 where
   D: InternalDispatcher,
@@ -235,7 +271,7 @@ where
     polyfills::inject(&ctx)
       .map_err(|e| anyhow::anyhow!("Failed to inject polyfills: {e}"))?;
 
-    inject_fetch_functions(&ctx, &disp, &fetch)
+    inject_fetch_functions(&ctx, &disp, &fetch, fetched, rendering)
       .map_err(|e| anyhow::anyhow!("Failed to inject fetch functions: {e}"))?;
 
     ctx.eval::<(), _>(source.as_str())
@@ -252,7 +288,7 @@ where
 }
 
 /// Call `__render(request)` on the persistent context.
-async fn do_render(ctx: &AsyncContext, req: SsrRequest) -> anyhow::Result<SsrResponse> {
+async fn do_render(ctx: &AsyncContext, req: SsrRequest, fetched: &AtomicBool) -> anyhow::Result<SsrResponse> {
   async_with!(ctx => |ctx| {
     let render_fn: Function = ctx
       .globals()
@@ -288,17 +324,34 @@ async fn do_render(ctx: &AsyncContext, req: SsrRequest) -> anyhow::Result<SsrRes
       .and_then(|h| rquickjs_serde::from_value(h.into()).ok())
       .unwrap_or_default();
 
+    let did_fetch = fetched.load(Ordering::Relaxed);
+
     Ok(SsrResponse {
       status,
       headers,
       body,
+      fetched: did_fetch,
     })
   })
   .await
 }
 
 /// Inject `__rust_internal_dispatch` and `__rust_http_fetch` into the context.
-fn inject_fetch_functions<D, F>(ctx: &Ctx<'_>, dispatcher: &Arc<D>, fetcher: &Arc<F>) -> Result<(), rquickjs::Error>
+///
+/// Both functions set the shared `fetched` flag to `true` when called,
+/// so that `do_render` can detect whether the page performed dynamic data fetching.
+/// The flag is shared via `Arc<AtomicBool>` — safe because renders are serial
+/// (single worker thread, single context).
+///
+/// The `rendering` flag prevents recursive internal dispatch that would deadlock
+/// the single-worker event loop (e.g., page `/foo` internally fetches `/foo`).
+fn inject_fetch_functions<D, F>(
+  ctx: &Ctx<'_>,
+  dispatcher: &Arc<D>,
+  fetcher: &Arc<F>,
+  fetched: Arc<AtomicBool>,
+  rendering: Arc<AtomicBool>,
+) -> Result<(), rquickjs::Error>
 where
   D: InternalDispatcher,
   F: ExternalFetcher,
@@ -306,13 +359,22 @@ where
   let globals = ctx.globals();
 
   let disp = dispatcher.clone();
+  let f1 = fetched.clone();
+  let ren = rendering.clone();
   globals.set(
     "__rust_internal_dispatch",
     Func::from(Async(move |method: String, path: String, body: Option<String>, headers: Object| {
+      f1.store(true, Ordering::Relaxed);
       let hdrs = extract_headers(headers);
       let body_bytes = body.as_deref().map(|b| b.as_bytes()).map(|b| b.to_vec());
       let disp = disp.clone();
+      let is_recursive = ren.load(Ordering::Relaxed);
       async move {
+        // Deadlock guard: if we're already rendering, a recursive internal
+        // dispatch would send to the channel and wait forever (single worker).
+        if is_recursive {
+          return DispatchResultJs(DispatchResult::error(503, "recursive internal dispatch detected"));
+        }
         let result = disp.dispatch(&method, &path, body_bytes.as_deref(), &hdrs).await;
         DispatchResultJs(result)
       }
@@ -320,9 +382,11 @@ where
   )?;
 
   let fetch = fetcher.clone();
+  let f2 = fetched.clone();
   globals.set(
     "__rust_http_fetch",
     Func::from(Async(move |url: String, method: String, body: Option<String>, headers: Object| {
+      f2.store(true, Ordering::Relaxed);
       let hdrs = extract_headers(headers);
       let body_bytes = body.as_deref().map(|b| b.as_bytes()).map(|b| b.to_vec());
       let fetcher = fetch.clone();
@@ -346,7 +410,9 @@ impl<'js> rquickjs::IntoJs<'js> for DispatchResultJs {
   fn into_js(self, ctx: &rquickjs::Ctx<'js>) -> rquickjs::Result<rquickjs::Value<'js>> {
     let obj = Object::new(ctx.clone())?;
     obj.set("status", self.0.status)?;
-    obj.set("body", self.0.body.as_str())?;
+    // Convert binary body to string at the JS boundary — lossy for non-UTF-8
+    let body_str = String::from_utf8_lossy(&self.0.body);
+    obj.set("body", body_str.into_owned())?;
 
     let headers_obj = Object::new(ctx.clone())?;
     for (k, v) in &self.0.headers {

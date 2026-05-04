@@ -10,7 +10,7 @@ use slate::salvo::SsrCache;
 
 /// Helper to create a cache entry.
 fn make_entry(status: u16, body: &str) -> slate::salvo::CachedEntry {
-  slate::salvo::CachedEntry { status, headers: HashMap::new(), body: body.to_string(), _cached_at: std::time::Instant::now() }
+  slate::salvo::CachedEntry { status, headers: HashMap::new(), body: body.to_string(), cached_at: std::time::Instant::now() }
 }
 
 #[test]
@@ -80,13 +80,16 @@ fn test_cache_bulk_eviction_at_capacity() {
   assert!(cache.get("/p/511").is_some(), "Entry 511 should exist before eviction");
   assert!(cache.get("/p/1023").is_some(), "Entry 1023 should exist before eviction");
 
-  // Insert one more — triggers bulk eviction (clear all, then insert the new one)
+  // Insert one more — triggers partial eviction (oldest half evicted, newer half kept)
   cache.set("/p/overflow".to_string(), make_entry(200, "overflow"));
 
-  // Old entries should be gone (cache was cleared)
-  assert!(cache.get("/p/0").is_none(), "Old entries should be evicted after bulk clear");
-  assert!(cache.get("/p/511").is_none(), "Old entries should be evicted after bulk clear");
-  assert!(cache.get("/p/1023").is_none(), "Old entries should be evicted after bulk clear");
+  // Oldest entries (0-511) should be evicted
+  assert!(cache.get("/p/0").is_none(), "Oldest entries should be evicted");
+  assert!(cache.get("/p/511").is_none(), "Oldest entries should be evicted");
+
+  // Newer entries (512-1023) should still be present
+  assert!(cache.get("/p/512").is_some(), "Newer entries should survive eviction");
+  assert!(cache.get("/p/1023").is_some(), "Newer entries should survive eviction");
 
   // The overflow entry should be present
   let overflow = cache.get("/p/overflow").unwrap();
@@ -101,7 +104,7 @@ fn test_cache_preserves_headers() {
   headers.insert("content-type".to_string(), "text/html".to_string());
   headers.insert("x-custom".to_string(), "value".to_string());
 
-  let entry = slate::salvo::CachedEntry { status: 200, headers, body: "ok".to_string(), _cached_at: std::time::Instant::now() };
+  let entry = slate::salvo::CachedEntry { status: 200, headers, body: "ok".to_string(), cached_at: std::time::Instant::now() };
 
   cache.set("/hdr".to_string(), entry);
 

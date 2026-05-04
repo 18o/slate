@@ -518,7 +518,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "example-sveltekit-salvo"
+name = "example-vue-salvo"
 version = "0.1.0"
 dependencies = [
  "anyhow",

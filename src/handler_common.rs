@@ -14,8 +14,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::engine::{SsrEngine, SsrRequest, SsrResponse};
-use crate::shared::{CachedEntry, ReqwestFetcher, SsrCache, is_cacheable};
-use crate::traits::InternalDispatcher;
+use crate::shared::{CachedEntry, SsrCache, is_cacheable};
+use crate::traits::{ExternalFetcher, InternalDispatcher};
 
 /// Maximum body size for request payloads (10 MB).
 pub const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
@@ -50,20 +50,20 @@ pub struct IncomingRequest {
 /// Holds the engine and cache. Framework-specific wrappers (Salvo's `Handler`,
 /// Axum's `Handler`) delegate to [`SsrHandlerCore::handle`] for the actual
 /// rendering logic, then convert the [`RenderOutcome`] into their own response type.
-pub struct SsrHandlerCore<D: InternalDispatcher> {
-  engine: Arc<SsrEngine<D, ReqwestFetcher>>,
+pub struct SsrHandlerCore<D: InternalDispatcher, F: ExternalFetcher> {
+  engine: Arc<SsrEngine<D, F>>,
   cache: Arc<SsrCache>,
 }
 
-impl<D: InternalDispatcher> SsrHandlerCore<D> {
+impl<D: InternalDispatcher, F: ExternalFetcher> SsrHandlerCore<D, F> {
   /// Create a new handler wrapping the given engine.
-  pub fn new(engine: Arc<SsrEngine<D, ReqwestFetcher>>) -> Self {
+  pub fn new(engine: Arc<SsrEngine<D, F>>) -> Self {
     Self { engine, cache: Arc::new(SsrCache::new()) }
   }
 
   /// Create from pre-existing engine and cache (for Clone implementations).
   #[cfg(feature = "axum")]
-  pub fn new_from_parts(engine: Arc<SsrEngine<D, ReqwestFetcher>>, cache: Arc<SsrCache>) -> Self {
+  pub fn new_from_parts(engine: Arc<SsrEngine<D, F>>, cache: Arc<SsrCache>) -> Self {
     Self { engine, cache }
   }
 
@@ -75,7 +75,7 @@ impl<D: InternalDispatcher> SsrHandlerCore<D> {
 
   /// Get a reference to the engine (for framework-specific Clone impls).
   #[cfg(feature = "axum")]
-  pub fn engine(&self) -> &Arc<SsrEngine<D, ReqwestFetcher>> {
+  pub fn engine(&self) -> &Arc<SsrEngine<D, F>> {
     &self.engine
   }
 
@@ -88,25 +88,20 @@ impl<D: InternalDispatcher> SsrHandlerCore<D> {
     let method = incoming.ssr_request.method.clone();
     let has_query = incoming.has_query;
 
-    // 1. Try cache first
-    if let Some(cached) = self.cache.get(&cache_key) {
+    // 1. Try cache first — skip lookup for query-string requests to prevent stale hits
+    if !has_query && let Some(cached) = self.cache.get(&cache_key) {
       return RenderOutcome::CacheHit(cached);
     }
 
     // 2. Cache miss — render via QuickJS
     match self.engine.render(incoming.ssr_request).await {
       Ok(ssr_res) => {
-        let cacheable = is_cacheable(&method, ssr_res.status, &ssr_res.headers, has_query);
+        let cacheable = is_cacheable(&method, ssr_res.status, &ssr_res.headers, has_query, ssr_res.fetched);
 
         if cacheable {
           self.cache.set(
             cache_key,
-            CachedEntry {
-              status: ssr_res.status,
-              headers: ssr_res.headers.clone(),
-              body: ssr_res.body.clone(),
-              _cached_at: Instant::now(),
-            },
+            CachedEntry { status: ssr_res.status, headers: ssr_res.headers.clone(), body: ssr_res.body.clone(), cached_at: Instant::now() },
           );
         }
 
@@ -127,7 +122,7 @@ impl<D: InternalDispatcher> SsrHandlerCore<D> {
 /// Result of the SSR render pipeline, before conversion to a framework response.
 pub enum RenderOutcome {
   /// Cache hit — return the cached entry with `x-ssr-cache: HIT`.
-  CacheHit(CachedEntry),
+  CacheHit(Arc<CachedEntry>),
   /// Fresh render — return with `x-ssr-cache: MISS`.
   Rendered(SsrResponse),
   /// Render failed — return 500 error page.
@@ -151,10 +146,42 @@ pub struct StaticAsset {
 /// Look up a static asset from a RustEmbed bundle.
 ///
 /// Searches for `client{path}` in the embedded assets.
+/// URL-decodes the path first so that `%20` (space) and other
+/// percent-encoded characters match the original filenames.
 /// Returns `Some(StaticAsset)` if found, `None` otherwise.
 pub fn lookup_static_asset<T: rust_embed::RustEmbed>(path: &str) -> Option<StaticAsset> {
-  let asset_path = format!("client{path}");
+  let decoded = percent_decode(path);
+  let asset_path = format!("client{decoded}");
   let file = T::get(&asset_path)?;
   let mime = mime_guess::from_path(&asset_path).first_or_octet_stream();
   Some(StaticAsset { mime: mime.as_ref().to_string(), data: file.data.to_vec(), immutable: asset_path.contains("/immutable/") })
+}
+
+/// Simple percent-decode for static file paths.
+fn percent_decode(input: &str) -> String {
+  let bytes = input.as_bytes();
+  let mut out = Vec::with_capacity(bytes.len());
+  let mut i = 0;
+  while i < bytes.len() {
+    if bytes[i] == b'%'
+      && i + 2 < bytes.len()
+      && let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2]))
+    {
+      out.push(hi << 4 | lo);
+      i += 3;
+      continue;
+    }
+    out.push(bytes[i]);
+    i += 1;
+  }
+  String::from_utf8(out).unwrap_or_default()
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+  match b {
+    b'0'..=b'9' => Some(b - b'0'),
+    b'a'..=b'f' => Some(b - b'a' + 10),
+    b'A'..=b'F' => Some(b - b'A' + 10),
+    _ => None,
+  }
 }

@@ -225,6 +225,10 @@ slate = { version = "0.1", features = ["salvo"] }  # + Salvo 集成
 slate = { version = "0.1", features = ["axum"] }   # + Axum 集成
 ```
 
+## 测试状态
+
+> **注意：** 目前仅在 **SvelteKit + Salvo** 组合上经过生产验证。其他组合（SvelteKit + Axum、Vue + Salvo、React + Axum 等）尚未实际测试，适配器和集成已实现但可能需要微调。
+
 ## 性能
 
 QuickJS 上下文在启动时**只初始化一次**（eval bundle、注入 polyfill）。每次 `render()` 调用只在持久上下文上执行 `__render()` —— 无线程创建、无重复编译。

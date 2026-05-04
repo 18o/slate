@@ -58,6 +58,12 @@ if (typeof URL === 'undefined') {
 }
 
 if (typeof URLSearchParams === 'undefined') {
+    // Safe decodeURIComponent — returns original string on malformed input instead of throwing URIError
+    var _safeDecode = function(s) {
+        try { return decodeURIComponent(s.replace(/\+/g, ' ')); }
+        catch(e) { return s.replace(/\+/g, ' '); }
+    };
+
     globalThis.URLSearchParams = function URLSearchParams(init) {
         this._params = [];
         if (typeof init === 'string') {
@@ -67,8 +73,8 @@ if (typeof URLSearchParams === 'undefined') {
                 for (var i = 0; i < pairs.length; i++) {
                     var p = pairs[i].split('=');
                     this._params.push([
-                        decodeURIComponent(p[0].replace(/\+/g, ' ')),
-                        decodeURIComponent((p[1] || '').replace(/\+/g, ' '))
+                        _safeDecode(p[0]),
+                        _safeDecode(p[1] || '')
                     ]);
                 }
             }
@@ -80,11 +86,41 @@ if (typeof URLSearchParams === 'undefined') {
         }
         return null;
     };
+    URLSearchParams.prototype.getAll = function(name) {
+        var result = [];
+        for (var i = 0; i < this._params.length; i++) {
+            if (this._params[i][0] === name) result.push(this._params[i][1]);
+        }
+        return result;
+    };
     URLSearchParams.prototype.has = function(name) {
         for (var i = 0; i < this._params.length; i++) {
             if (this._params[i][0] === name) return true;
         }
         return false;
+    };
+    URLSearchParams.prototype.set = function(name, value) {
+        var found = false;
+        for (var i = 0; i < this._params.length; i++) {
+            if (this._params[i][0] === name) {
+                if (!found) {
+                    this._params[i][1] = String(value);
+                    found = true;
+                } else {
+                    this._params.splice(i, 1);
+                    i--;
+                }
+            }
+        }
+        if (!found) this._params.push([name, String(value)]);
+    };
+    URLSearchParams.prototype.append = function(name, value) {
+        this._params.push([name, String(value)]);
+    };
+    URLSearchParams.prototype['delete'] = function(name) {
+        for (var i = this._params.length - 1; i >= 0; i--) {
+            if (this._params[i][0] === name) this._params.splice(i, 1);
+        }
     };
     URLSearchParams.prototype.toString = function() {
         return this._params.map(function(p) {
@@ -105,6 +141,9 @@ if (typeof URLSearchParams === 'undefined') {
             cb(this._params[i][1], this._params[i][0], this);
         }
     };
+    Object.defineProperty(URLSearchParams.prototype, 'size', {
+        get: function() { return this._params.length; }
+    });
 }
 
 // crypto — cryptographically secure random from Rust (not Math.random).
@@ -131,8 +170,9 @@ if (typeof crypto === 'undefined') {
         randomUUID: __rust_crypto_random_uuid,
                 subtle: {
                         digest: function(algo, data) {
-                                // Only SHA-256 is supported
-                                var algoUpper = (algo || '').toString().toUpperCase().replace('-', '');
+                                // Extract algo name — supports both string and { name: 'SHA-256' } forms
+                                var algoName = (typeof algo === 'object' && algo !== null) ? algo.name : algo;
+                                var algoUpper = (algoName || '').toString().toUpperCase().replace('-', '');
                                 if (algoUpper !== 'SHA256') {
                                         return Promise.reject(new Error("crypto.subtle.digest: only SHA-256 is supported, got '" + algo + "'"));
                                 }
@@ -175,8 +215,9 @@ if (typeof btoa === 'undefined') {
 }
 if (typeof atob === 'undefined') {
     globalThis.atob = function(str) {
+        str = String(str).replace(/=+$/, '');
+        if (!/^[A-Za-z0-9+/]*$/.test(str)) throw new Error("atob: invalid character");
         var output = '';
-        str = str.replace(/=+$/, '');
         for (var i = 0; i < str.length; i += 4) {
             var a = _b64chars.indexOf(str.charAt(i));
             var b = _b64chars.indexOf(str.charAt(i + 1));

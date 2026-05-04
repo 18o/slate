@@ -12420,7 +12420,7 @@ ${stack}\nhttps://svelte.dev/e/hydratable_serialization_failed`);
         state.getClientAddress ||
         (() => {
           throw new Error(
-            `@twist/adapter-quickjs does not specify getClientAddress. Please raise an issue`,
+            `@slate/adapter-quickjs does not specify getClientAddress. Please raise an issue`,
           );
         }),
       locals: {},
@@ -13099,7 +13099,7 @@ ${stack}\nhttps://svelte.dev/e/hydratable_serialization_failed`);
     };
   })();
 
-  // @twist/adapter-quickjs — server entry (bundled to IIFE)
+  // @slate/adapter-quickjs — server entry (bundled to IIFE)
   // This file is the temporary rollup entry point.
   // After bundling, the output is a single IIFE entry.js with no imports.
 
@@ -13281,7 +13281,7 @@ ${stack}\nhttps://svelte.dev/e/hydratable_serialization_failed`);
 
   // ━━ URL / URLSearchParams ━━
   // Injected by Rust polyfills before this IIFE evals.
-  // If somehow still missing (e.g. running outside twist-ssr), provide fallback.
+  // If somehow still missing (e.g. running outside slate-ssr), provide fallback.
   // NOTE: Using new RegExp() instead of regex literals to avoid conflicts
   // with template string escaping in generateServerEntry().
   if (typeof URL === "undefined") {

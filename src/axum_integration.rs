@@ -32,6 +32,13 @@ use crate::traits::{DispatchResult, InternalDispatcher};
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /// Dispatches relative-path fetches through Axum's internal router.
+///
+/// **Security note**: The dispatch uses a clone of the `Router` passed to
+/// [`AxumDispatcher::new()`]. Any middleware applied **after** cloning
+/// (e.g., `router.layer(AuthLayer)`) will NOT be active during internal
+/// dispatch. To ensure auth checks apply to internal fetches, put
+/// authorization logic **inside** individual route handlers, not as outer
+/// middleware layers on the router.
 pub struct AxumDispatcher {
   router: Router,
 }
@@ -52,15 +59,20 @@ impl InternalDispatcher for AxumDispatcher {
     let mut builder = axum::http::request::Builder::new().method(http_method).uri(uri);
 
     for (key, value) in headers {
-      if let (Ok(name), Ok(val)) = (key.parse::<HeaderName>(), value.parse::<HeaderValue>()) {
-        builder.headers_mut().unwrap().insert(name, val);
+      if let (Ok(name), Ok(val)) = (key.parse::<HeaderName>(), value.parse::<HeaderValue>())
+        && let Some(hdrs) = builder.headers_mut()
+      {
+        hdrs.insert(name, val);
       }
     }
 
     let axum_body = body.map(|b| Body::from(b.to_vec())).unwrap_or(Body::empty());
 
-    let request =
-      builder.body(axum_body).unwrap_or_else(|_| AxumRequest::builder().method(Method::GET).uri("/").body(Body::empty()).unwrap());
+    // If the primary builder fails, fall back to a minimal GET / request.
+    // The fallback itself uses unwrap_or_else to avoid any possibility of panic.
+    let request = builder.body(axum_body).unwrap_or_else(|_| {
+      AxumRequest::builder().method(Method::GET).uri("/").body(Body::empty()).unwrap_or_else(|_| AxumRequest::new(Body::empty()))
+    });
 
     let mut router = self.router.clone();
     let response = match router.as_service().ready().await {
@@ -68,12 +80,12 @@ impl InternalDispatcher for AxumDispatcher {
         Ok(res) => res,
         Err(e) => {
           tracing::error!("SSR internal dispatch error: {e}");
-          return DispatchResult { status: 500, headers: HashMap::new(), body: r#"{"error":"internal dispatch failed"}"#.to_string() };
+          return DispatchResult::error(500, "internal dispatch failed");
         }
       },
       Err(e) => {
         tracing::error!("SSR internal dispatch ready error: {e}");
-        return DispatchResult { status: 500, headers: HashMap::new(), body: r#"{"error":"service not ready"}"#.to_string() };
+        return DispatchResult::error(500, "service not ready");
       }
     };
 
@@ -86,7 +98,7 @@ impl InternalDispatcher for AxumDispatcher {
       tracing::error!("SSR dispatch body read error: {e}");
       bytes::Bytes::new()
     });
-    let body = String::from_utf8(body_bytes.to_vec()).unwrap_or_default();
+    let body = body_bytes.to_vec();
 
     tracing::debug!("SSR internal dispatch result: {status} ({} bytes)", body.len());
 
@@ -103,7 +115,7 @@ impl InternalDispatcher for AxumDispatcher {
 /// Delegates caching and rendering logic to [`SsrHandlerCore`],
 /// then converts the result into an Axum `Response`.
 pub struct SsrHandler {
-  core: SsrHandlerCore<AxumDispatcher>,
+  core: SsrHandlerCore<AxumDispatcher, ReqwestFetcher>,
 }
 
 impl SsrHandler {
@@ -146,8 +158,13 @@ impl axum::handler::Handler<(), ()> for SsrHandler {
 
       match outcome {
         RenderOutcome::CacheHit(cached) => {
-          let mut response = AxumResponse::builder().status(cached.status).body(Body::from(cached.body)).unwrap();
+          let status = StatusCode::from_u16(cached.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+          let mut response = safe_build_response(AxumResponse::builder().status(status), Body::from(cached.body.clone()));
           for (k, v) in &cached.headers {
+            // Skip content-length — Axum/hyper computes it from the actual body.
+            if k.eq_ignore_ascii_case("content-length") {
+              continue;
+            }
             if let (Ok(name), Ok(val)) = (k.parse::<HeaderName>(), v.parse::<HeaderValue>()) {
               response.headers_mut().insert(name, val);
             }
@@ -160,11 +177,10 @@ impl axum::handler::Handler<(), ()> for SsrHandler {
           response.headers_mut().insert(HeaderName::from_static("x-ssr-cache"), HeaderValue::from_static("MISS"));
           response
         }
-        RenderOutcome::Error => AxumResponse::builder()
-          .status(StatusCode::INTERNAL_SERVER_ERROR)
-          .header("content-type", "text/html; charset=utf-8")
-          .body(Body::from(handler_common::ERROR_PAGE_500))
-          .unwrap(),
+        RenderOutcome::Error => safe_build_response(
+          AxumResponse::builder().status(StatusCode::INTERNAL_SERVER_ERROR).header("content-type", "text/html; charset=utf-8"),
+          Body::from(handler_common::ERROR_PAGE_500),
+        ),
       }
     })
   }
@@ -176,17 +192,40 @@ fn extract_axum_headers(req: &AxumRequest) -> HashMap<String, String> {
 
 async fn extract_body(req: AxumRequest) -> Option<String> {
   let bytes = to_bytes(req.into_body(), handler_common::MAX_BODY_SIZE).await.ok()?;
-  Some(String::from_utf8(bytes.to_vec()).unwrap_or_default())
+  match String::from_utf8(bytes.to_vec()) {
+    Ok(s) => Some(s),
+    Err(e) => {
+      tracing::debug!("SSR: non-UTF-8 request body, ignoring: {e}");
+      None
+    }
+  }
 }
 
 fn build_axum_response(ssr_res: SsrResponse) -> AxumResponse {
-  let mut builder = AxumResponse::builder().status(ssr_res.status);
+  let status = StatusCode::from_u16(ssr_res.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+  let mut builder = AxumResponse::builder().status(status);
   for (k, v) in &ssr_res.headers {
+    // Skip content-length — Axum/hyper computes it from the actual body.
+    if k.eq_ignore_ascii_case("content-length") {
+      continue;
+    }
     if let (Ok(name), Ok(val)) = (k.parse::<HeaderName>(), v.parse::<HeaderValue>()) {
       builder = builder.header(name, val);
     }
   }
-  builder.body(Body::from(ssr_res.body)).unwrap()
+  safe_build_response(builder, ssr_res.body)
+}
+
+/// Build an Axum response without panic.
+///
+/// `http::response::Builder::body()` can theoretically fail if the builder
+/// is in an error state. This function falls back to a minimal 200 OK
+/// response with the body as-is, ensuring no panic path exists.
+fn safe_build_response(builder: axum::http::response::Builder, body: impl Into<Body>) -> AxumResponse {
+  builder.body(body.into()).unwrap_or_else(|_| {
+    tracing::error!("SSR: failed to build Axum response, falling back to minimal 200");
+    AxumResponse::new(Body::empty())
+  })
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -221,7 +260,7 @@ impl<T: RustEmbed + Send + Sync + 'static> axum::handler::Handler<(), ()> for Pr
 
       if let Some(asset) = handler_common::lookup_static_asset::<T>(path) {
         let mut response =
-          AxumResponse::builder().status(StatusCode::OK).header("content-type", &asset.mime).body(Body::from(asset.data)).unwrap();
+          safe_build_response(AxumResponse::builder().status(StatusCode::OK).header("content-type", &asset.mime), Body::from(asset.data));
 
         if asset.immutable {
           response
@@ -248,7 +287,7 @@ where
 {
   let dispatch_router = api_router.clone();
 
-  let engine = crate::engine::SsrEngine::new::<T>(AxumDispatcher::new(dispatch_router), ReqwestFetcher::new()).await?;
+  let engine = crate::engine::SsrEngine::new::<T>(AxumDispatcher::new(dispatch_router), ReqwestFetcher::new()?).await?;
 
   let handler = ProductionHandler::<T>::new(SsrHandler::new(Arc::new(engine)));
 

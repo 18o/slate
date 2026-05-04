@@ -9,37 +9,43 @@ export const POLYFILLS = `
 if (typeof Headers === 'undefined') {
   globalThis.Headers = class Headers {
     constructor(init) {
-      this._map = new Map();
+      this._list = [];
       if (init) {
         if (init instanceof Headers) {
-          init.forEach((v, k) => this._map.set(k, v));
+          init._list.forEach(function(entry) { this._list.push([entry[0], entry[1]]); }.bind(this));
         } else if (Array.isArray(init)) {
-          for (const [key, value] of init) {
-            this._map.set(key.toLowerCase(), String(value));
+          for (var i = 0; i < init.length; i++) {
+            this._list.push([String(init[i][0]).toLowerCase(), String(init[i][1])]);
           }
         } else if (typeof init === 'object') {
-          for (const [key, value] of Object.entries(init)) {
-            this._map.set(key.toLowerCase(), String(value));
+          var keys = Object.keys(init);
+          for (var i = 0; i < keys.length; i++) {
+            this._list.push([keys[i].toLowerCase(), String(init[keys[i]])]);
           }
         }
       }
     }
-    get(name) { return this._map.get(name.toLowerCase()) || null; }
-    set(name, value) { this._map.set(name.toLowerCase(), String(value)); }
-    has(name) { return this._map.has(name.toLowerCase()); }
-    delete(name) { this._map.delete(name.toLowerCase()); }
-    entries() { return this._map.entries(); }
-    keys() { return this._map.keys(); }
-    values() { return this._map.values(); }
-    [Symbol.iterator]() { return this._map.entries(); }
-    forEach(cb) { this._map.forEach((v, k) => cb(v, k, this)); }
-    getSetCookie() {
-      var result = [];
-      this._map.forEach(function(v, k) {
-        if (k === 'set-cookie') result.push(v);
-      });
-      return result;
+    get(name) {
+      var n = name.toLowerCase();
+      // WHATWG: set-cookie returns first value only; others return all values joined by ", "
+      if (n === 'set-cookie') {
+        for (var i = 0; i < this._list.length; i++) { if (this._list[i][0] === n) return this._list[i][1]; }
+        return null;
+      }
+      var values = [];
+      for (var i = 0; i < this._list.length; i++) { if (this._list[i][0] === n) values.push(this._list[i][1]); }
+      return values.length > 0 ? values.join(', ') : null;
     }
+    set(name, value) { var n = name.toLowerCase(); this._list = this._list.filter(function(e) { return e[0] !== n; }); this._list.push([n, String(value)]); }
+    has(name) { var n = name.toLowerCase(); for (var i = 0; i < this._list.length; i++) { if (this._list[i][0] === n) return true; } return false; }
+    delete(name) { var n = name.toLowerCase(); this._list = this._list.filter(function(e) { return e[0] !== n; }); }
+    append(name, value) { this._list.push([name.toLowerCase(), String(value)]); }
+    entries() { return this._list[Symbol.iterator](); }
+    keys() { var seen = {}, result = []; for (var i = 0; i < this._list.length; i++) { if (!seen[this._list[i][0]]) { seen[this._list[i][0]] = true; result.push(this._list[i][0]); } } return result[Symbol.iterator](); }
+    values() { return this._list.map(function(e) { return e[1]; })[Symbol.iterator](); }
+    [Symbol.iterator]() { return this._list[Symbol.iterator](); }
+    forEach(cb) { for (var i = 0; i < this._list.length; i++) { cb(this._list[i][1], this._list[i][0], this); } }
+    getSetCookie() { return this._list.filter(function(e) { return e[0] === 'set-cookie'; }).map(function(e) { return e[1]; }); }
   };
 }
 
@@ -87,7 +93,12 @@ if (typeof Response === 'undefined') {
       this.url = '';
     }
     async json() { return JSON.parse(typeof this.body === 'string' ? this.body : ''); }
-    async text() { return typeof this.body === 'string' ? this.body : ''; }
+    async text() {
+      if (typeof this.body === 'string') return this.body;
+      if (this.body instanceof Uint8Array) return new TextDecoder().decode(this.body);
+      if (this.body instanceof ArrayBuffer) return new TextDecoder().decode(new Uint8Array(this.body));
+      return '';
+    }
     async arrayBuffer() {
       if (this.body instanceof ArrayBuffer) return this.body;
       const str = typeof this.body === 'string' ? this.body : '';
@@ -98,10 +109,18 @@ if (typeof Response === 'undefined') {
     }
     clone() { return new Response(this.body, { status: this.status, headers: this.headers }); }
     static json(data, init = {}) {
-      return new Response(JSON.stringify(data), {
-        status: init.status || 200,
-        headers: { 'content-type': 'application/json', ...init.headers },
-      });
+      var hdrs = { 'content-type': 'application/json' };
+      if (init.headers) {
+        if (init.headers instanceof Headers) {
+          init.headers.forEach(function(v, k) { hdrs[k] = v; });
+        } else if (Array.isArray(init.headers)) {
+          for (var i = 0; i < init.headers.length; i++) { hdrs[String(init.headers[i][0]).toLowerCase()] = String(init.headers[i][1]); }
+        } else {
+          var keys = Object.keys(init.headers);
+          for (var i = 0; i < keys.length; i++) { hdrs[keys[i].toLowerCase()] = String(init.headers[keys[i]]); }
+        }
+      }
+      return new Response(JSON.stringify(data), { status: init.status || 200, headers: hdrs });
     }
     static redirect(url, status = 302) {
       const res = new Response(null, { status });
@@ -176,6 +195,10 @@ if (typeof URL === 'undefined') {
   URL.prototype.toJSON = function() { return this.href; };
 }
 if (typeof URLSearchParams === 'undefined') {
+  var _safeDecode = function(s) {
+    try { return decodeURIComponent(s.replace(/\\+/g, ' ')); }
+    catch(e) { return s.replace(/\\+/g, ' '); }
+  };
   globalThis.URLSearchParams = function URLSearchParams(init) {
     this._params = [];
     if (typeof init === 'string') {
@@ -183,19 +206,24 @@ if (typeof URLSearchParams === 'undefined') {
       if (init) init.split('&').forEach(function(p) {
         var kv = p.split('=');
         this._params.push([
-          decodeURIComponent(kv[0].replace(/\\+/g, ' ')),
-          decodeURIComponent((kv[1] || '').replace(/\\+/g, ' '))
+          _safeDecode(kv[0]),
+          _safeDecode(kv[1] || '')
         ]);
       }.bind(this));
     }
   };
   URLSearchParams.prototype.get = function(n) { for (var i = 0; i < this._params.length; i++) if (this._params[i][0] === n) return this._params[i][1]; return null; };
+  URLSearchParams.prototype.getAll = function(n) { var r = []; for (var i = 0; i < this._params.length; i++) if (this._params[i][0] === n) r.push(this._params[i][1]); return r; };
   URLSearchParams.prototype.has = function(n) { return this._params.some(function(p) { return p[0] === n; }); };
+  URLSearchParams.prototype.set = function(n, v) { var found = false; for (var i = 0; i < this._params.length; i++) { if (this._params[i][0] === n) { if (!found) { this._params[i][1] = String(v); found = true; } else { this._params.splice(i, 1); i--; } } } if (!found) this._params.push([n, String(v)]); };
+  URLSearchParams.prototype.append = function(n, v) { this._params.push([n, String(v)]); };
+  URLSearchParams.prototype['delete'] = function(n) { for (var i = this._params.length - 1; i >= 0; i--) { if (this._params[i][0] === n) this._params.splice(i, 1); } };
   URLSearchParams.prototype.toString = function() { return this._params.map(function(p) { return encodeURIComponent(p[0]) + '=' + encodeURIComponent(p[1]); }).join('&'); };
   URLSearchParams.prototype.keys = function() { return this._params.map(function(p) { return p[0]; })[Symbol.iterator](); };
   URLSearchParams.prototype.values = function() { return this._params.map(function(p) { return p[1]; })[Symbol.iterator](); };
   URLSearchParams.prototype.entries = function() { return this._params[Symbol.iterator](); };
   URLSearchParams.prototype.forEach = function(cb) { for (var i = 0; i < this._params.length; i++) cb(this._params[i][1], this._params[i][0], this); };
+  Object.defineProperty(URLSearchParams.prototype, 'size', { get: function() { return this._params.length; } });
 }
 
 // ━━ Object.hasOwn / AbortController ━━
@@ -232,8 +260,9 @@ if (typeof btoa === 'undefined') {
 if (typeof atob === 'undefined') {
   var _b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
   globalThis.atob = function(str) {
+    str = String(str).replace(/=+$/, '');
+    if (!/^[A-Za-z0-9+/]*$/.test(str)) throw new Error("atob: invalid character");
     var output = '';
-    str = str.replace(/=+$/, '');
     for (var i = 0; i < str.length; i += 4) {
       var a = _b64chars.indexOf(str.charAt(i));
       var b = _b64chars.indexOf(str.charAt(i + 1));
@@ -265,7 +294,19 @@ globalThis.fetch = async function(input, init) {
   var url = typeof input === 'string' ? input : (req ? req.url : String(input));
   var method = (init && init.method) || (req && req.method) || 'GET';
   var body = (init && init.body !== undefined) ? init.body : (req && req._body) || null;
-  var headers = (init && init.headers) || (req && req.headers) || {};
+  var rawHeaders = (init && init.headers) || (req && req.headers) || {};
+  var headers;
+  if (rawHeaders instanceof Headers) {
+    headers = {};
+    rawHeaders.forEach(function(v, k) { headers[k] = v; });
+  } else if (Array.isArray(rawHeaders)) {
+    headers = {};
+    for (var hi = 0; hi < rawHeaders.length; hi++) {
+      headers[String(rawHeaders[hi][0]).toLowerCase()] = String(rawHeaders[hi][1]);
+    }
+  } else {
+    headers = rawHeaders;
+  }
 
   if (url.startsWith('https://') || url.startsWith('http://')) {
     const result = await __rust_http_fetch(url, method, body, headers);

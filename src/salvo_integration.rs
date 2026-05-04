@@ -77,25 +77,47 @@ impl InternalDispatcher for SalvoDispatcher {
     let hdrs: std::collections::HashMap<String, String> =
       res.headers.iter().map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string())).collect();
 
-    let body = read_res_body(res.body).await;
+    let body = match read_res_body(res.body).await {
+      Ok(b) => b,
+      Err(err) => return err,
+    };
 
     tracing::debug!("SSR internal dispatch result: {status} ({} bytes)", body.len());
-
     DispatchResult { status, headers: hdrs, body }
   }
 }
 
-/// Read body text from a Salvo ResBody.
-async fn read_res_body(body: ResBody) -> String {
+/// Read body bytes from a Salvo ResBody.
+///
+/// Applies [`handler_common::MAX_BODY_SIZE`] limit to all variants.
+/// Returns `Err(DispatchResult)` on overflow so callers can propagate the error.
+async fn read_res_body(body: ResBody) -> Result<Vec<u8>, DispatchResult> {
   match body {
-    ResBody::Once(bytes) => String::from_utf8(bytes.to_vec()).unwrap_or_default(),
+    ResBody::Once(bytes) => {
+      if bytes.len() > handler_common::MAX_BODY_SIZE {
+        tracing::warn!("SSR internal dispatch: body exceeds limit ({} bytes)", bytes.len());
+        return Err(DispatchResult::error(502, "internal dispatch: response body exceeds size limit"));
+      }
+      Ok(bytes.to_vec())
+    }
     ResBody::Chunks(chunks) => {
       let bytes: Vec<u8> = chunks.into_iter().flat_map(|c| c.to_vec()).collect();
-      String::from_utf8(bytes).unwrap_or_default()
+      if bytes.len() > handler_common::MAX_BODY_SIZE {
+        tracing::warn!("SSR internal dispatch: chunked body exceeds limit ({} bytes)", bytes.len());
+        return Err(DispatchResult::error(502, "internal dispatch: response body exceeds size limit"));
+      }
+      Ok(bytes)
     }
     other => match other.collect().await {
-      Ok(collected) => String::from_utf8(collected.to_bytes().to_vec()).unwrap_or_default(),
-      Err(_) => String::new(),
+      Ok(collected) => {
+        let bytes = collected.to_bytes().to_vec();
+        if bytes.len() > handler_common::MAX_BODY_SIZE {
+          tracing::warn!("SSR internal dispatch: collected body exceeds limit ({} bytes)", bytes.len());
+          return Err(DispatchResult::error(502, "internal dispatch: response body exceeds size limit"));
+        }
+        Ok(bytes)
+      }
+      Err(_) => Ok(Vec::new()),
     },
   }
 }
@@ -109,7 +131,7 @@ async fn read_res_body(body: ResBody) -> String {
 /// Delegates caching and rendering logic to [`SsrHandlerCore`],
 /// then converts the result into a Salvo `Response`.
 pub struct SsrHandler {
-  core: SsrHandlerCore<SalvoDispatcher>,
+  core: SsrHandlerCore<SalvoDispatcher, ReqwestFetcher>,
 }
 
 impl SsrHandler {
@@ -143,7 +165,10 @@ impl SalvoHandler for SsrHandler {
 
     match outcome {
       RenderOutcome::CacheHit(cached) => {
-        apply_ssr_response(res, SsrResponse { status: cached.status, headers: cached.headers, body: cached.body });
+        apply_ssr_response(
+          res,
+          SsrResponse { status: cached.status, headers: cached.headers.clone(), body: cached.body.clone(), fetched: false },
+        );
         let _ = res.headers.insert(http::header::HeaderName::from_static("x-ssr-cache"), http::header::HeaderValue::from_static("HIT"));
       }
       RenderOutcome::Rendered(ssr_res) => {
@@ -163,6 +188,11 @@ impl SalvoHandler for SsrHandler {
 fn apply_ssr_response(res: &mut Response, ssr_res: SsrResponse) {
   res.status_code = Some(StatusCode::from_u16(ssr_res.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
   for (key, value) in &ssr_res.headers {
+    // Skip content-length — Salvo/hyper computes it from the actual body.
+    // SvelteKit SSR may report a different length than what QuickJS returns.
+    if key.eq_ignore_ascii_case("content-length") {
+      continue;
+    }
     if let (Ok(name), Ok(val)) = (key.parse::<http::header::HeaderName>(), value.parse::<http::header::HeaderValue>()) {
       res.headers.insert(name, val);
     }
@@ -181,12 +211,15 @@ fn extract_salvo_headers(req: &Request) -> std::collections::HashMap<String, Str
 }
 
 async fn extract_body(req: &mut Request) -> Option<String> {
-  req
-    .payload()
-    .await
-    .ok()
-    .filter(|bytes| bytes.len() <= handler_common::MAX_BODY_SIZE)
-    .map(|bytes| String::from_utf8(bytes.to_vec()).unwrap_or_default())
+  req.payload().await.ok().filter(|bytes| bytes.len() <= handler_common::MAX_BODY_SIZE).and_then(|bytes| {
+    match String::from_utf8(bytes.to_vec()) {
+      Ok(s) => Some(s),
+      Err(e) => {
+        tracing::debug!("SSR: non-UTF-8 request body, ignoring: {e}");
+        None
+      }
+    }
+  })
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -217,7 +250,10 @@ impl<T: RustEmbed + Send + Sync + 'static> SalvoHandler for ProductionHandler<T>
       }
 
       if asset.immutable {
-        let _ = res.headers.insert(salvo::http::header::CACHE_CONTROL, "public, max-age=31536000, immutable".parse().unwrap());
+        let _ = res.headers.insert(
+          salvo::http::header::CACHE_CONTROL,
+          "public, max-age=31536000, immutable".parse().unwrap_or_else(|_| http::header::HeaderValue::from_static("public")),
+        );
       }
 
       res.body = ResBody::Once(asset.data.into());
@@ -242,7 +278,7 @@ where
   let dispatch_router = router_factory().await;
   let dispatch_service = Arc::new(Service::new(dispatch_router));
 
-  let engine = crate::engine::SsrEngine::new::<T>(SalvoDispatcher::new(dispatch_service), ReqwestFetcher::new()).await?;
+  let engine = crate::engine::SsrEngine::new::<T>(SalvoDispatcher::new(dispatch_service), ReqwestFetcher::new()?).await?;
   let handler = engine.handler();
 
   let main_router = router_factory().await.push(Router::with_path("{*rest}").goal(ProductionHandler::<T>::new(handler)));
@@ -257,7 +293,7 @@ where
 impl crate::engine::SsrEngine<SalvoDispatcher, ReqwestFetcher> {
   /// Create engine with Salvo dispatcher and reqwest fetcher.
   pub async fn with_salvo<T: RustEmbed>(service: Arc<Service>) -> anyhow::Result<Self> {
-    Self::new::<T>(SalvoDispatcher::new(service), ReqwestFetcher::new()).await
+    Self::new::<T>(SalvoDispatcher::new(service), ReqwestFetcher::new()?).await
   }
 
   /// Create a Salvo-compatible Handler for this engine.

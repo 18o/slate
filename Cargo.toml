@@ -42,6 +42,12 @@ http = "1"
 # Random (for crypto.getRandomValues polyfill)
 rand = "0.10"
 
+# SHA-256 (for crypto.subtle.digest polyfill)
+sha2 = "0.11"
+
+# URL parsing (for SSRF protection)
+url = "2"
+
 # ── Shared between Salvo & Axum ──
 parking_lot = { version = "0.12", optional = true }
 

@@ -66,7 +66,7 @@ async fn test_axum_dispatcher_get() {
   let result = dispatcher.dispatch("GET", "/api/hello?name=test", None, &[]).await;
 
   assert_eq!(result.status, 200);
-  assert!(result.body.contains("hello test"));
+  assert!(String::from_utf8_lossy(&result.body).contains("hello test"));
 }
 
 #[tokio::test]
@@ -77,7 +77,7 @@ async fn test_axum_dispatcher_post_with_body() {
   let result = dispatcher.dispatch("POST", "/api/data", Some(br#"{"key":"value"}"#), &[]).await;
 
   assert_eq!(result.status, 200);
-  assert!(result.body.contains("key"));
+  assert!(String::from_utf8_lossy(&result.body).contains("key"));
 }
 
 #[tokio::test]
@@ -109,11 +109,11 @@ async fn test_axum_dispatcher_multiple_requests() {
 
   let r1 = dispatcher.dispatch("GET", "/api/a?name=first", None, &[]).await;
   assert_eq!(r1.status, 200);
-  assert!(r1.body.contains("hello first"));
+  assert!(String::from_utf8_lossy(&r1.body).contains("hello first"));
 
   let r2 = dispatcher.dispatch("GET", "/api/b?name=second", None, &[]).await;
   assert_eq!(r2.status, 200);
-  assert!(r2.body.contains("hello second"));
+  assert!(String::from_utf8_lossy(&r2.body).contains("hello second"));
 
   let r3 = dispatcher.dispatch("GET", "/api/c", None, &[]).await;
   assert_eq!(r3.status, 404);
@@ -128,7 +128,7 @@ async fn test_axum_ssr_handler_renders_page() {
   let api_router = axum::Router::new().route("/api/hello", get(api_hello));
   let dispatcher = AxumDispatcher::new(api_router);
 
-  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new()).await.expect("Engine creation should succeed");
+  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new().unwrap()).await.expect("Engine creation should succeed");
 
   let handler = SsrHandler::new(Arc::new(engine));
 
@@ -151,7 +151,7 @@ async fn test_axum_ssr_handler_caches_get_requests() {
   let api_router = axum::Router::new().route("/api/hello", get(api_hello));
   let dispatcher = AxumDispatcher::new(api_router);
 
-  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new()).await.unwrap();
+  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new().unwrap()).await.unwrap();
   let handler = SsrHandler::new(Arc::new(engine));
 
   // First request — MISS
@@ -176,7 +176,7 @@ async fn test_axum_ssr_handler_does_not_cache_post() {
   let api_router = axum::Router::new().route("/api/data", post(api_echo));
   let dispatcher = AxumDispatcher::new(api_router);
 
-  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new()).await.unwrap();
+  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new().unwrap()).await.unwrap();
   let handler = SsrHandler::new(Arc::new(engine));
 
   let req = AxumRequest::builder().method(Method::POST).uri("/submit").body(Body::from(r#"{"data":"test"}"#)).unwrap();
@@ -192,5 +192,5 @@ async fn test_axum_ssr_handler_does_not_cache_post() {
 
 #[tokio::test]
 async fn test_axum_reqwest_fetcher_creation() {
-  let _fetcher = ReqwestFetcher::new();
+  let _fetcher = ReqwestFetcher::new().unwrap();
 }

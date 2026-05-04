@@ -48,7 +48,7 @@ async fn test_internal_dispatch_marker_present() {
 
   let result = dispatcher.dispatch("GET", "/api/hello?name=test", None, &[]).await;
   assert_eq!(result.status, 200);
-  assert!(result.body.contains("hello test"));
+  assert!(String::from_utf8_lossy(&result.body).contains("hello test"));
 }
 
 #[tokio::test]
@@ -59,7 +59,7 @@ async fn test_salvo_dispatcher_get() {
 
   let result = dispatcher.dispatch("GET", "/api/users?name=alice", None, &[]).await;
   assert_eq!(result.status, 200);
-  assert!(result.body.contains("hello alice"));
+  assert!(String::from_utf8_lossy(&result.body).contains("hello alice"));
 }
 
 #[tokio::test]
@@ -70,7 +70,7 @@ async fn test_salvo_dispatcher_post_with_body() {
 
   let result = dispatcher.dispatch("POST", "/api/data", Some(br#"{"key":"value"}"#), &[]).await;
   assert_eq!(result.status, 200);
-  assert!(result.body.contains("key"));
+  assert!(String::from_utf8_lossy(&result.body).contains("key"));
 }
 
 #[tokio::test]
@@ -104,12 +104,12 @@ async fn test_salvo_dispatcher_multiple_requests() {
   // Request 1
   let r1 = dispatcher.dispatch("GET", "/api/a?name=first", None, &[]).await;
   assert_eq!(r1.status, 200);
-  assert!(r1.body.contains("hello first"));
+  assert!(String::from_utf8_lossy(&r1.body).contains("hello first"));
 
   // Request 2
   let r2 = dispatcher.dispatch("GET", "/api/b?name=second", None, &[]).await;
   assert_eq!(r2.status, 200);
-  assert!(r2.body.contains("hello second"));
+  assert!(String::from_utf8_lossy(&r2.body).contains("hello second"));
 
   // 404
   let r3 = dispatcher.dispatch("GET", "/api/c", None, &[]).await;
@@ -118,5 +118,5 @@ async fn test_salvo_dispatcher_multiple_requests() {
 
 #[tokio::test]
 async fn test_reqwest_fetcher_creation() {
-  let _fetcher = ReqwestFetcher::new();
+  let _fetcher = ReqwestFetcher::new().unwrap();
 }

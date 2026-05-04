@@ -25,7 +25,7 @@ impl MockDispatcher {
     let mut responses = HashMap::new();
     responses.insert(
       "/api/test".to_string(),
-      DispatchResult { status: 200, headers: HashMap::new(), body: r#"{"message":"hello from mock dispatcher"}"#.to_string() },
+      DispatchResult { status: 200, headers: HashMap::new(), body: r#"{"message":"hello from mock dispatcher"}"#.to_string().into_bytes() },
     );
     Self { responses }
   }
@@ -36,7 +36,7 @@ impl InternalDispatcher for MockDispatcher {
     self.responses.get(path).cloned().unwrap_or(DispatchResult {
       status: 404,
       headers: HashMap::new(),
-      body: r#"{"error":"not found"}"#.to_string(),
+      body: r#"{"error":"not found"}"#.to_string().into_bytes(),
     })
   }
 }
@@ -45,7 +45,7 @@ struct MockFetcher;
 
 impl ExternalFetcher for MockFetcher {
   async fn fetch(&self, url: &str, _method: &str, _body: Option<&[u8]>, _headers: &[(String, String)]) -> DispatchResult {
-    DispatchResult { status: 200, headers: HashMap::new(), body: format!("{{\"url\":\"{url}\"}}") }
+    DispatchResult { status: 200, headers: HashMap::new(), body: format!("{{\"url\":\"{url}\"}}").into_bytes() }
   }
 }
 

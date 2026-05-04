@@ -7,7 +7,6 @@
 
 use rust_embed::RustEmbed;
 use salvo::prelude::*;
-use slate;
 
 #[derive(RustEmbed)]
 #[folder = "frontend/build/"]
@@ -18,9 +17,7 @@ async fn main() -> anyhow::Result<()> {
   tracing_subscriber::fmt::init();
 
   let router = slate::salvo::init_ssr::<FrontendAssets, _, _>(|| async {
-    Router::new()
-      .push(Router::with_path("/api/hello").get(api_hello))
-      .push(Router::with_path("/api/time").get(api_time))
+    Router::new().push(Router::with_path("/api/hello").get(api_hello)).push(Router::with_path("/api/time").get(api_time))
   })
   .await?;
 
@@ -39,10 +36,7 @@ async fn api_hello(res: &mut Response) {
 
 #[handler]
 async fn api_time(res: &mut Response) {
-  let now = std::time::SystemTime::now()
-    .duration_since(std::time::UNIX_EPOCH)
-    .unwrap_or_default()
-    .as_secs();
+  let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
   res.render(Json(serde_json::json!({
     "time": format!("2026-05-04T00:00:00Z"),
     "unix": now,

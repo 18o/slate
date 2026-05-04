@@ -7,7 +7,6 @@
 
 use rust_embed::RustEmbed;
 use salvo::prelude::*;
-use slate;
 
 #[derive(RustEmbed)]
 #[folder = "frontend/build/"]
