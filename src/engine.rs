@@ -88,6 +88,10 @@ where
   request_tx: mpsc::Sender<WorkerMsg>,
   worker_alive: Arc<AtomicBool>,
   render_timeout: Duration,
+  #[allow(dead_code)]
+  memory_limit: Option<usize>,
+  #[allow(dead_code)]
+  max_stack_size: Option<usize>,
   _worker_handle: Option<std::thread::JoinHandle<()>>,
   _phantom: PhantomData<(D, F)>,
 }
@@ -106,7 +110,13 @@ where
   /// 4. Enters an event loop, calling `__render()` for each request
   ///
   /// Blocks until initialization completes (or fails).
-  pub async fn new<T: RustEmbed>(dispatcher: D, fetcher: F, render_timeout: Duration) -> anyhow::Result<Self> {
+  pub async fn new<T: RustEmbed>(
+    dispatcher: D,
+    fetcher: F,
+    render_timeout: Duration,
+    memory_limit: Option<usize>,
+    max_stack_size: Option<usize>,
+  ) -> anyhow::Result<Self> {
     let file =
       T::get("entry.js").ok_or_else(|| anyhow::anyhow!("'entry.js' not found in embedded assets. Did you build with adapter-quickjs?"))?;
     let bundle_source = Arc::new(String::from_utf8(file.data.to_vec()).map_err(|e| anyhow::anyhow!("entry.js is not valid UTF-8: {e}"))?);
@@ -126,7 +136,18 @@ where
     let tokio_handle = tokio::runtime::Handle::current();
 
     let worker_handle = std::thread::spawn(move || {
-      worker_entry(WorkerCtx { req_rx, init_tx, dispatcher, fetcher, bundle_source, tokio_handle, alive: alive_flag, render_timeout });
+      worker_entry(WorkerCtx {
+        req_rx,
+        init_tx,
+        dispatcher,
+        fetcher,
+        bundle_source,
+        tokio_handle,
+        alive: alive_flag,
+        render_timeout,
+        memory_limit,
+        max_stack_size,
+      });
     });
 
     // Wait for worker to finish initialization
@@ -134,7 +155,15 @@ where
 
     tracing::info!("SsrEngine ready (bundle: {bundle_size} bytes)");
 
-    Ok(Self { request_tx: req_tx, worker_alive, render_timeout, _worker_handle: Some(worker_handle), _phantom: PhantomData })
+    Ok(Self {
+      request_tx: req_tx,
+      worker_alive,
+      render_timeout,
+      memory_limit,
+      max_stack_size,
+      _worker_handle: Some(worker_handle),
+      _phantom: PhantomData,
+    })
   }
 
   /// Render a page by calling `__render(request)` on the persistent context.
@@ -204,6 +233,8 @@ where
   tokio_handle: tokio::runtime::Handle,
   alive: Arc<AtomicBool>,
   render_timeout: Duration,
+  memory_limit: Option<usize>,
+  max_stack_size: Option<usize>,
 }
 
 /// Worker thread entry point.
@@ -214,7 +245,18 @@ where
   D: InternalDispatcher,
   F: ExternalFetcher,
 {
-  let WorkerCtx { mut req_rx, init_tx, dispatcher, fetcher, bundle_source, tokio_handle, alive, render_timeout } = ctx;
+  let WorkerCtx {
+    mut req_rx,
+    init_tx,
+    dispatcher,
+    fetcher,
+    bundle_source,
+    tokio_handle,
+    alive,
+    render_timeout,
+    memory_limit,
+    max_stack_size,
+  } = ctx;
   let local_rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
     Ok(rt) => rt,
     Err(e) => {
@@ -243,8 +285,14 @@ where
         return;
       }
     };
-    rt.set_memory_limit(10 * 1024 * 1024).await;
-    rt.set_max_stack_size(512 * 1024).await;
+    // QuickJS sandbox limits.
+    // A 3.6 MB IIFE bundle needs ~15-20 MB during eval (source + AST + bytecode +
+    // runtime objects — typically 3-5x the source size). 128 MB is comfortable
+    // for bundles up to ~20 MB. Override via SsrConfig::memory_limit.
+    rt.set_memory_limit(memory_limit.unwrap_or(128 * 1024 * 1024)).await;
+    // Stack limit for recursive JS code. 2 MB is generous — typical SSR render
+    // uses < 100 KB of stack space. Override via SsrConfig::max_stack_size.
+    rt.set_max_stack_size(max_stack_size.unwrap_or(2 * 1024 * 1024)).await;
 
     let fetched = Arc::new(AtomicBool::new(false));
 

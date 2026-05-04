@@ -46,6 +46,17 @@ pub struct SsrConfig {
   pub error_html: Option<String>,
   /// Maximum time for a single `__render()` call. Default: 30 seconds.
   pub render_timeout: Duration,
+  /// QuickJS memory limit in bytes. When `None`, defaults to 128 MB.
+  ///
+  /// A 3.6 MB IIFE bundle needs ~15-20 MB during eval (source + AST +
+  /// bytecode + runtime objects — typically 3-5x the source size).
+  /// 128 MB is comfortable for bundles up to ~20 MB.
+  pub memory_limit: Option<usize>,
+  /// QuickJS stack size limit in bytes. When `None`, defaults to 2 MB.
+  ///
+  /// Typical SSR render uses < 100 KB of stack space; 2 MB is generous
+  /// for deeply recursive JS code.
+  pub max_stack_size: Option<usize>,
   /// Number of parallel QuickJS worker threads. Default: 1.
   /// Set to 2–8 for high-concurrency deployments. Each worker runs an
   /// independent QuickJS context — memory cost is ~2 MB per worker.
@@ -54,7 +65,7 @@ pub struct SsrConfig {
 
 impl Default for SsrConfig {
   fn default() -> Self {
-    Self { error_html: None, render_timeout: Duration::from_secs(30), pool_size: 1 }
+    Self { error_html: None, render_timeout: Duration::from_secs(30), memory_limit: None, max_stack_size: None, pool_size: 1 }
   }
 }
 

@@ -130,7 +130,7 @@ async fn test_axum_ssr_handler_renders_page() {
   let api_router = axum::Router::new().route("/api/hello", get(api_hello));
   let dispatcher = AxumDispatcher::new(api_router);
 
-  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new().unwrap(), Duration::from_secs(3))
+  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new().unwrap(), Duration::from_secs(3), None, None)
     .await
     .expect("Engine creation should succeed");
 
@@ -155,7 +155,7 @@ async fn test_axum_ssr_handler_caches_get_requests() {
   let api_router = axum::Router::new().route("/api/hello", get(api_hello));
   let dispatcher = AxumDispatcher::new(api_router);
 
-  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new().unwrap(), Duration::from_secs(3)).await.unwrap();
+  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new().unwrap(), Duration::from_secs(3), None, None).await.unwrap();
   let handler = SsrHandler::new(Arc::new(engine), &SsrConfig::default());
 
   // First request — MISS
@@ -180,7 +180,7 @@ async fn test_axum_ssr_handler_does_not_cache_post() {
   let api_router = axum::Router::new().route("/api/data", post(api_echo));
   let dispatcher = AxumDispatcher::new(api_router);
 
-  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new().unwrap(), Duration::from_secs(3)).await.unwrap();
+  let engine = SsrEngine::new::<TestAssets>(dispatcher, ReqwestFetcher::new().unwrap(), Duration::from_secs(3), None, None).await.unwrap();
   let handler = SsrHandler::new(Arc::new(engine), &SsrConfig::default());
 
   let req = AxumRequest::builder().method(Method::POST).uri("/submit").body(Body::from(r#"{"data":"test"}"#)).unwrap();

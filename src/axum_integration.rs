@@ -317,9 +317,14 @@ where
   let pool_size = config.pool_size.max(1);
   let mut engines = Vec::with_capacity(pool_size);
   for _ in 0..pool_size {
-    let engine =
-      crate::engine::SsrEngine::new::<T>(AxumDispatcher::new(dispatch_router.clone()), ReqwestFetcher::new()?, config.render_timeout)
-        .await?;
+    let engine = crate::engine::SsrEngine::new::<T>(
+      AxumDispatcher::new(dispatch_router.clone()),
+      ReqwestFetcher::new()?,
+      config.render_timeout,
+      config.memory_limit,
+      config.max_stack_size,
+    )
+    .await?;
     engines.push(Arc::new(engine));
   }
   let core = SsrHandlerCore::pooled(engines, &config);

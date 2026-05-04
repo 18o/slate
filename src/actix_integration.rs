@@ -256,7 +256,14 @@ where
   let mut engines = Vec::with_capacity(pool_size);
   for _ in 0..pool_size {
     let cfg: Arc<dyn Fn(&mut web::ServiceConfig) + Send + Sync> = Arc::new(api_config.clone());
-    let engine = SsrEngine::new::<T>(ActixDispatcher::new(cfg), ReqwestFetcher::new()?, config.render_timeout).await?;
+    let engine = SsrEngine::new::<T>(
+      ActixDispatcher::new(cfg),
+      ReqwestFetcher::new()?,
+      config.render_timeout,
+      config.memory_limit,
+      config.max_stack_size,
+    )
+    .await?;
     engines.push(Arc::new(engine));
   }
   let core = SsrHandlerCore::pooled(engines, &config);

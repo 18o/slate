@@ -307,6 +307,8 @@ where
       SalvoDispatcher::new(Arc::new(Service::new(router_factory().await))),
       ReqwestFetcher::new()?,
       config.render_timeout,
+      config.memory_limit,
+      config.max_stack_size,
     )
     .await?;
     engines.push(Arc::new(engine));
@@ -326,7 +328,7 @@ where
 impl crate::engine::SsrEngine<SalvoDispatcher, ReqwestFetcher> {
   /// Create engine with Salvo dispatcher and reqwest fetcher.
   pub async fn with_salvo<T: RustEmbed>(service: Arc<Service>) -> anyhow::Result<Self> {
-    Self::new::<T>(SalvoDispatcher::new(service), ReqwestFetcher::new()?, Duration::from_secs(30)).await
+    Self::new::<T>(SalvoDispatcher::new(service), ReqwestFetcher::new()?, Duration::from_secs(30), None, None).await
   }
 
   /// Create a Salvo-compatible Handler for this engine.

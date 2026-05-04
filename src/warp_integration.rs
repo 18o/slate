@@ -115,7 +115,14 @@ where
   let dispatch_api = api_boxed.clone();
 
   for _ in 0..pool_size {
-    let engine = SsrEngine::new::<T>(WarpDispatcher::new(dispatch_api.clone()), ReqwestFetcher::new()?, config.render_timeout).await?;
+    let engine = SsrEngine::new::<T>(
+      WarpDispatcher::new(dispatch_api.clone()),
+      ReqwestFetcher::new()?,
+      config.render_timeout,
+      config.memory_limit,
+      config.max_stack_size,
+    )
+    .await?;
     engines.push(Arc::new(engine));
   }
 
