@@ -355,9 +355,9 @@ where
       .map_err(|e| anyhow::anyhow!("Failed to inject fetch functions: {e}"))?;
 
     ctx.eval::<(), _>(source.as_str())
-      .map_err(|_| {
+      .map_err(|e| {
         let err_msg = extract_js_error(&ctx);
-        anyhow::anyhow!("Failed to eval bundle: {err_msg}")
+        anyhow::anyhow!("Failed to eval bundle: {e} — JS error: {err_msg}")
       })?;
 
     Ok::<_, anyhow::Error>(())
@@ -418,6 +418,14 @@ async fn do_render(ctx: &AsyncContext, req: SsrRequest, fetched: &AtomicBool) ->
     }
 
     let did_fetch = fetched.load(Ordering::Relaxed);
+
+    if status >= 500 {
+      tracing::error!("SSR render returned {status} for {} {}", req.method, req.url);
+      tracing::debug!("SSR error body for {} {}: {}", req.method, req.url, safe_truncate(&body, 2000));
+      for (k, v) in &headers {
+        tracing::debug!("SSR error header: {}={}", k, v);
+      }
+    }
 
     Ok(SsrResponse {
       status,
@@ -512,6 +520,19 @@ impl<'js> rquickjs::IntoJs<'js> for DispatchResultJs {
     obj.set("headers", headers_arr)?;
 
     Ok(obj.into_value())
+  }
+}
+
+/// Truncate &str to at most `max_bytes` bytes, never splitting a UTF-8 character.
+fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+  if s.len() <= max_bytes {
+    s
+  } else {
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+      end -= 1;
+    }
+    &s[..end]
   }
 }
 

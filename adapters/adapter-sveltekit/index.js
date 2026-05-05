@@ -111,8 +111,24 @@ const server = new Server(manifest);
 // and await it inside __render before handling any requests.
 // QuickJS may not reliably drive async init via ??= pattern,
 // so we also provide a manual fallback to ensure hooks are set.
+
+// Inject process.env so that SvelteKit hooks and loaders can access
+// environment variables via process.env.XXX (Node.js convention).
+// This bundled output is always production — set NODE_ENV accordingly.
+var _env = globalThis.__env || {};
+if (!_env.NODE_ENV) _env.NODE_ENV = 'production';
+if (typeof process === 'undefined') {
+  globalThis.process = { env: _env, argv: [], version: 'v20.0.0' };
+} else if (!process.env) {
+  process.env = _env;
+}
+
 const _initPromise = server.init({
   env: globalThis.__env || {},
+}).then(() => {
+  console.log('[SSR] server.init() completed successfully');
+}).catch((e) => {
+  console.error('[SSR] server.init() failed:', e && e.stack || e);
 });
 
 // Track whether init completed successfully
@@ -122,6 +138,7 @@ var _initError = null;
 // ━━ __render Entry Point ━━
 // Called by SsrEngine::render() for each SSR request.
 globalThis.__render = async function(request) {
+  console.log('[SSR] __render called for', request.method, request.url);
   // Ensure server.init() has completed before responding.
   if (!_initDone) {
     try {
@@ -130,6 +147,7 @@ globalThis.__render = async function(request) {
     } catch(e) {
       _initError = e;
       _initDone = true;
+      console.error('[SSR] init await failed:', e && e.stack || e);
       throw new Error('SvelteKit server.init() failed: ' + (e && e.message || String(e)));
     }
   }
@@ -143,21 +161,38 @@ globalThis.__render = async function(request) {
     body: request.body != null ? request.body : undefined,
   });
 
-  const response = await server.respond(webRequest, {
-    getClientAddress: () => request.remote_addr || '127.0.0.1',
-  });
+  var response;
+  try {
+    console.log('[SSR] calling server.respond()...');
+    response = await server.respond(webRequest, {
+      getClientAddress: () => request.remote_addr || '127.0.0.1',
+    });
+    console.log('[SSR] server.respond() returned status:', response.status);
+  } catch(e) {
+    console.error('[SSR] server.respond() threw:', e && e.stack || e);
+    throw e;
+  }
 
   // Extract body: response.text() may return empty if body is Uint8Array
   // (native TextEncoder.encode returns TypedArray, Response polyfill may not handle it)
   var body;
   try {
     body = await response.text();
-  } catch(e) {}
+  } catch(e) {
+    console.error('[SSR] response.text() failed:', e && e.stack || e);
+  }
   if (!body && response.body) {
     if (typeof response.body === 'string') body = response.body;
     else if (response.body instanceof Uint8Array) {
       body = new TextDecoder().decode(response.body);
     }
+  }
+
+  // Log error response body for debugging
+  if (response.status >= 500) {
+    console.error('[SSR] Error response body:', body && body.substring(0, 2000));
+  } else if (response.status >= 400) {
+    console.log('[SSR] 4xx response for', request.url, 'status:', response.status);
   }
 
   // Serialize headers as array of [key, value] pairs — preserves multi-value
