@@ -169,10 +169,18 @@ impl SalvoHandler for SsrHandler {
           res,
           SsrResponse { status: cached.status, headers: cached.headers.clone(), body: cached.body.clone(), fetched: false },
         );
+        // Cached pages are always static (dynamic pages are never cached by SsrCache).
+        let _ = res
+          .headers
+          .insert(http::header::CACHE_CONTROL, http::header::HeaderValue::from_static("public, max-age=0, s-maxage=300, must-revalidate"));
         let _ = res.headers.insert(http::header::HeaderName::from_static("x-ssr-cache"), http::header::HeaderValue::from_static("HIT"));
       }
       RenderOutcome::Rendered(ssr_res) => {
+        // Dynamic pages (fetched DB data) — never cache at CDN or browser.
+        // Static pages — short CDN cache (5 min), browser revalidates every time.
+        let cache_control = if ssr_res.fetched { "no-store" } else { "public, max-age=0, s-maxage=300, must-revalidate" };
         apply_ssr_response(res, ssr_res);
+        let _ = res.headers.insert(http::header::CACHE_CONTROL, http::header::HeaderValue::from_static(cache_control));
         let _ = res.headers.insert(http::header::HeaderName::from_static("x-ssr-cache"), http::header::HeaderValue::from_static("MISS"));
       }
       RenderOutcome::Error => {

@@ -184,8 +184,19 @@ async fn ssr_handler<T: RustEmbed + 'static>(
   };
 
   Ok(match core.handle(incoming).await {
-    RenderOutcome::CacheHit(cached) => build_ssr_response(cached.status, &cached.headers, &cached.body, "HIT"),
-    RenderOutcome::Rendered(ssr_res) => build_ssr_response(ssr_res.status, &ssr_res.headers, &ssr_res.body, "MISS"),
+    RenderOutcome::CacheHit(cached) => {
+      let mut resp = build_ssr_response(cached.status, &cached.headers, &cached.body, "HIT");
+      resp
+        .headers_mut()
+        .insert(http::header::CACHE_CONTROL, http::header::HeaderValue::from_static("public, max-age=0, s-maxage=300, must-revalidate"));
+      resp
+    }
+    RenderOutcome::Rendered(ssr_res) => {
+      let cache_control = if ssr_res.fetched { "no-store" } else { "public, max-age=0, s-maxage=300, must-revalidate" };
+      let mut resp = build_ssr_response(ssr_res.status, &ssr_res.headers, &ssr_res.body, "MISS");
+      resp.headers_mut().insert(http::header::CACHE_CONTROL, http::header::HeaderValue::from_static(cache_control));
+      resp
+    }
     RenderOutcome::Error => {
       let mut resp = warp::reply::html(core.error_html()).into_response();
       *resp.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;

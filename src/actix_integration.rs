@@ -158,8 +158,20 @@ pub async fn ssr_handler<T: RustEmbed + 'static>(req: HttpRequest, body: web::By
   let incoming = IncomingRequest { path, has_query: req.uri().query().is_some(), ssr_request: extract_request(req, body).await };
 
   match state.core.handle(incoming).await {
-    RenderOutcome::CacheHit(cached) => build_ssr_response(cached.status, &cached.headers, &cached.body, "HIT"),
-    RenderOutcome::Rendered(ssr_res) => build_ssr_response(ssr_res.status, &ssr_res.headers, &ssr_res.body, "MISS"),
+    RenderOutcome::CacheHit(cached) => {
+      let mut resp = build_ssr_response(cached.status, &cached.headers, &cached.body, "HIT");
+      resp.headers_mut().insert(
+        actix_web::http::header::CACHE_CONTROL,
+        actix_web::http::header::HeaderValue::from_static("public, max-age=0, s-maxage=300, must-revalidate"),
+      );
+      resp
+    }
+    RenderOutcome::Rendered(ssr_res) => {
+      let cache_control = if ssr_res.fetched { "no-store" } else { "public, max-age=0, s-maxage=300, must-revalidate" };
+      let mut resp = build_ssr_response(ssr_res.status, &ssr_res.headers, &ssr_res.body, "MISS");
+      resp.headers_mut().insert(actix_web::http::header::CACHE_CONTROL, actix_web::http::header::HeaderValue::from_static(cache_control));
+      resp
+    }
     RenderOutcome::Error => {
       HttpResponse::InternalServerError().insert_header(("content-type", "text/html; charset=utf-8")).body(state.core.error_html())
     }

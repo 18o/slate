@@ -172,11 +172,17 @@ impl axum::handler::Handler<(), ()> for SsrHandler {
               response.headers_mut().append(name, val);
             }
           }
+          // Cached pages are always static (dynamic pages are never cached by SsrCache).
+          response
+            .headers_mut()
+            .insert(http::header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=0, s-maxage=300, must-revalidate"));
           response.headers_mut().insert(HeaderName::from_static("x-ssr-cache"), HeaderValue::from_static("HIT"));
           response
         }
         RenderOutcome::Rendered(ssr_res) => {
+          let cache_control = if ssr_res.fetched { "no-store" } else { "public, max-age=0, s-maxage=300, must-revalidate" };
           let mut response = build_axum_response(ssr_res);
+          response.headers_mut().insert(http::header::CACHE_CONTROL, HeaderValue::from_static(cache_control));
           response.headers_mut().insert(HeaderName::from_static("x-ssr-cache"), HeaderValue::from_static("MISS"));
           response
         }
